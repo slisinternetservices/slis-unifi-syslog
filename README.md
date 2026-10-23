@@ -23,13 +23,13 @@ These capabilities come from upstream. Their individual integrations have not al
 inside it. The full server keeps local ClickHouse; below 2 GiB RAM is not yet supported.
 
 
-Use a **unprivileged Debian 13 amd64 CT (LXC)** on Proxmox VE 9.x, including the requested 9.2.21 environment.
+Use an **unprivileged Debian 13 amd64 CT (LXC)** on Proxmox VE 9.x, including the requested 9.2.21 environment.
 Start with **2 CPU cores, 2048 MiB RAM, 1024 MiB swap, 16 GiB disk**.
 This is a suggested test allocation; storage requirements depend on log volume and retention.
 The installer must run **inside the guest CT**, never in the Proxmox host shell.
 
 Download/extract the test bundle, then follow [the installation guide](docs/PROXMOX.md).
-The bundle contains the Linux executable and installer; the bundle includes the compiled binary.
+The bundle contains the Linux executable and installer.
 It needs internet access for Debian and ClickHouse packages during installation.
 
 ```bash
@@ -44,11 +44,11 @@ before accessing the dashboard over untrusted networks.
 
 ## Send UniFi logs
 
-In your UniFi Network remote logging / SIEM settings, set the VM IP and port 514.
+In your UniFi Network remote logging / SIEM settings, set the CT IP and port 514.
 Enable logging on the firewall rules you want to inspect. Menu names vary by UniFi version.
 Optional controller API keys can enrich client and device names.
 
-For test traffic on the VM:
+For test traffic in the CT:
 
 ```bash
 unify-syslog simulate --target 127.0.0.1:514 --rate 10 --sites 1

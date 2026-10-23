@@ -19,6 +19,7 @@
 #   USS_CH_CLUSTER=name                store logs replicated on this cluster
 # The connection can also be changed later under Administration > Storage.
 set -euo pipefail
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 REPO="slisinternetservices/slis-unifi-syslog"
 APP_DIR="/opt/unify-syslog"
@@ -43,6 +44,15 @@ info() { echo -e "${c_info}==>${c_off} $*"; }
 ok()   { echo -e "${c_ok}✔${c_off} $*"; }
 warn() { echo -e "${c_warn}!${c_off} $*"; }
 die()  { echo -e "${c_err}✘ $*${c_off}" >&2; exit 1; }
+
+# Accept standard sha256sum manifests with LF or CRLF, but fail closed on
+# missing/duplicate/malformed entries and on any payload digest mismatch.
+verify_checksum() {
+  local directory="$1" asset="$2" expected
+  expected=$(awk -v asset="$asset" '{ sub(/\r$/, ""); if ($2 == asset || $2 == "*" asset) print $1 }' "$directory/checksums.txt") || return 1
+  [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+  (cd "$directory" && printf '%s  %s\n' "$expected" "$asset" | sha256sum --check --status)
+}
 
 LOG=/var/log/unify-syslog-install.log
 # Run a command with its output in $LOG; on failure show the tail so the cause is visible.
@@ -284,9 +294,8 @@ else
   ASSET="unify-syslog-server_linux_${ARCH}.tar.gz"
   BASE="https://github.com/${REPO}/releases/download/${VERSION}"
   curl -fsSL -o "$TMP/$ASSET" "$BASE/$ASSET"
-  if curl -fsSL -o "$TMP/checksums.txt" "$BASE/checksums.txt"; then
-    (cd "$TMP" && grep " ${ASSET}\$" checksums.txt | sha256sum -c --quiet -) || die "Checksum mismatch"
-  fi
+  curl -fsSL -o "$TMP/checksums.txt" "$BASE/checksums.txt" || die "Could not download checksums; refusing an unverified installation"
+  verify_checksum "$TMP" "$ASSET" || die "Checksum verification failed (missing, malformed, duplicate or mismatched checksum)"
   TARBALL="$TMP/$ASSET"
 fi
 tar -xzf "$TARBALL" -C "$APP_DIR" unify-syslog

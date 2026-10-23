@@ -12,6 +12,14 @@
 
 ## [Unreleased]
 
+### Fixed
+- Installer checksum verification accepts LF and CRLF manifests and fails closed on missing,
+  duplicate, malformed or mismatched entries. Fixes the beta.2 Windows checksum packaging error.
+- Bundled installer normalizes checksum manifest line endings before checking.
+- Bootstrap installation uses the Debian C.UTF-8 locale to avoid missing en_US locale warnings.
+- Updated host provisioner retrieves the repaired installer while retaining beta.2 binaries.
+
+
 - Published the source to the SLIS GitHub repository and added a Linux-tested beta release workflow.
 - Full backend tests passed on the GitHub Linux runner; actual Proxmox guest acceptance remains outstanding.
 

@@ -4,6 +4,8 @@ set -euo pipefail
 [[ $EUID -eq 0 && -d /etc/pve ]] || { echo "Run as root on the Proxmox host." >&2; exit 1; }
 command -v pct >/dev/null
 VERSION=v0.1.0-beta.2
+# Installer repairs can be shipped without replacing tested application binaries.
+INSTALL_REF=main
 CTID="${SLIS_CTID:-$(pvesh get /cluster/nextid | tr -d '\"')}"
 STORAGE="${SLIS_STORAGE:-local-lvm}"
 TEMPLATE_STORAGE="${SLIS_TEMPLATE_STORAGE:-local}"
@@ -24,8 +26,8 @@ for _ in $(seq 1 60); do
   pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1 && break
   sleep 2
 done
-pct exec "$CTID" -- bash -c 'apt-get update && apt-get install -y curl ca-certificates'
-pct exec "$CTID" -- curl -fsSL "https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/$VERSION/deploy/install.sh" -o /root/slis-install.sh
+pct exec "$CTID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive bash -c 'apt-get update && apt-get install -y curl ca-certificates'
+pct exec "$CTID" -- curl -fsSL "https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/$INSTALL_REF/deploy/install.sh" -o /root/slis-install.sh
 pct exec "$CTID" -- env USS_PROFILE=ct-small USS_VERSION="$VERSION" USS_NONINTERACTIVE=1 bash /root/slis-install.sh
 echo "SLIS CT $CTID ready: 2 CPU, 2048 MiB RAM, 1024 MiB swap, 16 GiB disk."
 pct exec "$CTID" -- hostname -I

@@ -6,7 +6,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 [[ ! -e /etc/pve ]] || { echo "Refusing to install on a Proxmox host." >&2; exit 1; }
 [[ ! -e /etc/unify-syslog/config.yaml && ! -e /var/lib/unify-syslog/meta.db ]] || { echo "Use a fresh CT; an existing installation was found." >&2; exit 1; }
 [[ $(uname -m) == x86_64 ]] || { echo "This test bundle requires amd64." >&2; exit 1; }
-sha256sum --check checksums.txt
+tr -d '\r' < checksums.txt | sha256sum --check -
 export USS_LOCAL_TARBALL="$PWD/unify-syslog-server_linux_amd64.tar.gz"
 export USS_NONINTERACTIVE=1
 export USS_PROFILE=ct-small

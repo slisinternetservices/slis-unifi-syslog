@@ -25,7 +25,7 @@ Swap is an emergency buffer, not a substitute for RAM.
 Run in the Proxmox HOST shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/v0.1.0-beta.2/ct/slis-unifi-syslog.sh -o /root/slis-ct.sh
+curl -fsSL https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/main/ct/slis-unifi-syslog.sh -o /root/slis-ct.sh
 bash /root/slis-ct.sh
 ```
 
@@ -86,3 +86,35 @@ Use HTTPS before access over untrusted networks. Back up and verify restore sepa
 
 Reference: https://pve.proxmox.com/pve-docs/
 ClickHouse memory settings: https://clickhouse.com/docs/reference/settings/server-settings/settings
+
+## Repair beta.2 checksum installation failure
+
+The first beta.2 checksum manifests used Windows CRLF line endings. The original
+installer failed to select the matching checksum line even though the downloaded
+binary was intact. The repaired installer accepts both line ending formats and
+still verifies the actual SHA-256 digest. Application binaries remain beta.2.
+
+For the reported partial installation in CT 103, run on the Proxmox HOST:
+
+```bash
+pct exec 103 -- curl -fsSL https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/main/deploy/install.sh -o /root/slis-install-fixed.sh
+pct exec 103 -- env USS_PROFILE=ct-small USS_VERSION=v0.1.0-beta.2 USS_NONINTERACTIVE=1 bash /root/slis-install-fixed.sh
+```
+
+This resumes installation inside the existing CT. It does not destroy the CT or
+reset its database/configuration. Once complete:
+
+```bash
+pct exec 103 -- systemctl is-active clickhouse-server unify-syslog
+pct exec 103 -- cat /root/unify-syslog.creds
+pct exec 103 -- hostname -I
+```
+
+Open http://CT-IP:8080 using the printed address and credentials.
+The locale and systemd nesting warnings in the reported output did not cause
+this checksum failure; ClickHouse had already started. No nesting change is
+required to repair this specific failure.
+
+For an extracted original beta.2 bundle inside a fresh CT, normalize the inner
+manifest before using its original wrapper: `sed -i 's/\r$//' checksums.txt`.
+Then run `sudo bash install-slis.sh`; checksum verification remains enabled.

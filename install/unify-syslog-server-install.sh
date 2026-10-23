@@ -15,7 +15,7 @@ update_os
 
 msg_info "Installing UniFi Syslog Server (ClickHouse + app)"
 curl -fsSL "https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/main/deploy/install.sh" -o /tmp/uss-install.sh
-USS_NONINTERACTIVE=1 $STD bash /tmp/uss-install.sh
+USS_PROFILE=ct-small USS_VERSION=v0.1.0-beta.2 USS_NONINTERACTIVE=1 $STD bash /tmp/uss-install.sh
 rm -f /tmp/uss-install.sh
 msg_ok "Installed UniFi Syslog Server"
 

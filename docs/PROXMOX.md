@@ -1,57 +1,88 @@
-# Proxmox test deployment
+# Proxmox CT installation (beta.2)
 
-Target: Debian 13 amd64 guest on Proxmox VE 9.x. The requested host version is 9.2.21;
-this package has not been boot-tested on that exact host. No access to your Proxmox server was supplied.
-Reference: [official Proxmox documentation](https://www.proxmox.com/en/downloads/proxmox-virtual-environment/documentation).
+Target: an unprivileged Debian 13 amd64 CT (LXC) on Proxmox VE 9.x.
+The exact requested host version 9.2.21 still requires testing on your host.
 
-## Create the guest
+## Small profile
 
-1. Upload a Debian 13 amd64 installer ISO to Proxmox storage and create a new VM.
-2. Allocate 4 vCPU, 8 GB RAM and a 64 GB VirtIO SCSI disk for this initial test.
-3. Set CPU type to `host`, enable the QEMU guest agent option and attach a VirtIO NIC to the appropriate bridge/VLAN.
-4. Install Debian 13 with SSH server, a stable IP address and correct DNS/NTP.
-5. In the guest, optionally install `qemu-guest-agent` and enable its service.
-6. Copy the release bundle to the guest using SCP, extract it and enter its directory.
+| Resource | Setting |
+| --- | --- |
+| CPU | 2 cores (maximum in the SLIS provisioner) |
+| RAM | 2048 MiB |
+| Swap | 1024 MiB |
+| Root disk | 16 GiB |
+| Container | Unprivileged, no nesting required |
+| Network | DHCP on vmbr0 by default |
 
-Example from a machine with the bundle:
+This is a low-volume test profile for the complete server including local ClickHouse.
+It is not a measured production minimum. RAM below 2 GiB is not currently supported.
+The automated installation smoke test applies a 2 GiB memory limit and 2 CPU limit.
+Heavy queries, GeoIP, backups or more traffic can require more memory or disk.
+Swap is an emergency buffer, not a substitute for RAM.
+
+## Create a CT from the Proxmox host
+
+Run in the Proxmox HOST shell:
 
 ```bash
-scp slis-unifi-syslog-0.1.0-beta.1-linux-amd64.tar.gz user@VM-IP:/tmp/
+curl -fsSL https://raw.githubusercontent.com/slisinternetservices/slis-unifi-syslog/v0.1.0-beta.2/ct/slis-unifi-syslog.sh -o /root/slis-ct.sh
+bash /root/slis-ct.sh
 ```
 
-Inside the guest:
+The script allocates a free CT ID, downloads the official Debian 13 template, creates
+an unprivileged CT and installs the server INSIDE it. It never installs ClickHouse on
+the Proxmox host. Existing CT IDs are refused and failed CTs are retained for diagnosis.
+
+For other storage/bridge settings:
 
 ```bash
-mkdir -p ~/slis-test
-cd ~/slis-test
-tar -xzf /tmp/slis-unifi-syslog-0.1.0-beta.1-linux-amd64.tar.gz
+SLIS_CTID=120 SLIS_STORAGE=local-lvm SLIS_TEMPLATE_STORAGE=local SLIS_BRIDGE=vmbr0 bash /root/slis-ct.sh
+```
+
+Choose storage and bridge names available on YOUR host. Template storage must accept
+container templates; root disk storage must accept container root disks.
+A DHCP server, DNS and outbound HTTPS are required. No SSH password is set by the
+provisioner: administer the CT using the Proxmox console or `pct enter CTID`.
+
+## Existing empty CT
+
+Alternatively create a fresh Debian 13 unprivileged CT in Proxmox with the resources
+above, copy/extract the beta.2 installation bundle INSIDE the CT, and run:
+
+```bash
 sudo bash install-slis.sh
 ```
 
-The wrapper verifies the bundled binary archive and installer checksums before installing.
-Run on a fresh VM: it deliberately refuses an existing SLIS/upstream configuration.
-The upstream installer sets up ClickHouse, a restricted service account and systemd services.
-A CPU with SSE4.2 is required by the bundled installation path; the installer checks CPU flags.
-Internet access is required for OS/database packages. No Go/Node compiler is needed in the VM.
+Do not run this inner installer on the Proxmox host. Do not use it to retune an existing
+beta.1 installation; install a fresh CT for this beta and preserve existing logs/backups.
+
+## What the small profile changes
+
+- Ingestion queue: 4096 messages, batches of 1000 and one ingestion worker.
+- Go runtime: GOMEMLIMIT=192MiB (soft GC target), GOMAXPROCS=2.
+- ClickHouse: 32 MiB mark cache, uncompressed cache disabled, smaller background pools.
+- Query parallelism: 2 threads; tracked query memory limit: 256 MiB.
+- ClickHouse tracked server memory budget: 65% of available RAM, capped around 1.3 GiB.
+
+These are application budgets, not hard limits for total resident memory. Proxmox enforces
+the CT memory limit. During bursts a small queue can drop messages; watch System status.
+Start with 7 days retention under Administration > Settings for the 16 GiB disk.
+The upstream 90-day default remains until you change it. Monitor storage usage.
 
 ## Acceptance checklist
 
-- `systemctl is-active unify-syslog clickhouse-server` reports both active.
-- `curl -f http://127.0.0.1:8080/api/health` returns an OK response.
-- Open port 8080 from your management machine and sign in with generated credentials.
-- Confirm SLIS logo, blue/cyan interface, English labels and version 0.1.0-beta.1.
-- Start the simulator, confirm searchable logs and stop it after a minute.
-- Configure one real UniFi device and verify its hostname, events and timestamps.
-- Restart the VM and verify both services return and previously received logs remain searchable.
-- Restrict the syslog allowlist and test that an unlisted source is rejected.
-- Create a backup and verify restore on a separate disposable VM before using production data.
+1. Both `systemctl is-active unify-syslog clickhouse-server` services are active in the CT.
+2. `curl -f http://127.0.0.1:8080/api/health` returns OK.
+3. Sign in at `http://CT-IP:8080`, check SLIS logo and beta.2 version.
+4. Send logs from one real UniFi device to UDP/TCP 514; check timestamps and device name.
+5. Set retention to 7 days and restrict the syslog allowlist to your devices/VPN.
+6. Observe RAM, swap, dropped packets and disk usage during a typical day.
+7. Restart the CT and verify old logs remain searchable and new messages arrive.
 
-## Troubleshooting
+Credentials: `/root/unify-syslog.creds` inside the CT. Change the admin password.
+Logs: `/var/log/unify-syslog-install.log` and `journalctl -u unify-syslog -u clickhouse-server`.
+Allow web access only from administrators; keep database ports private.
+Use HTTPS before access over untrusted networks. Back up and verify restore separately.
 
-Installer log: `/var/log/unify-syslog-install.log`.
-Services: `journalctl -u unify-syslog -u clickhouse-server -n 100`.
-No logs: check UniFi destination, source allowlist, VM bridge/VLAN, guest and Proxmox firewall rules.
-CPU errors: confirm the guest sees the required physical CPU flags.
-For HTTPS use the application security settings/reverse proxy; do not expose plain HTTP to the internet.
-
-LXC scripts are inherited in the source tree, but this first SLIS test guide and bundle target a VM.
+Reference: https://pve.proxmox.com/pve-docs/
+ClickHouse memory settings: https://clickhouse.com/docs/reference/settings/server-settings/settings

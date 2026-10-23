@@ -1,6 +1,6 @@
 # SLIS UniFi Syslog Server
 
-**SLIS Internet Services - 0.1.0-beta.1 (test release)**
+**SLIS Internet Services - 0.1.0-beta.2 (test release)**
 
 A central log server for UniFi networks, based on [rhisijmuiden/unifi-syslog-server](https://github.com/rhisijmuiden/unifi-syslog-server).
 It receives UDP/TCP syslog on port 514, parses UniFi events, stores logs in ClickHouse,
@@ -18,21 +18,26 @@ These capabilities come from upstream. Their individual integrations have not al
 
 ## First installation on Proxmox
 
-Use a **dedicated Debian 13 amd64 VM** on Proxmox VE 9.x, including the requested 9.2.21 environment.
-Start with **4 vCPU, 8 GB RAM, 64 GB disk**, VirtIO network and CPU type `host`.
+**The beta.2 default is a small CT.** Use the host provisioner described in
+[docs/PROXMOX.md](docs/PROXMOX.md), or create an empty CT and run the bundle installer
+inside it. The full server keeps local ClickHouse; below 2 GiB RAM is not yet supported.
+
+
+Use a **unprivileged Debian 13 amd64 CT (LXC)** on Proxmox VE 9.x, including the requested 9.2.21 environment.
+Start with **2 CPU cores, 2048 MiB RAM, 1024 MiB swap, 16 GiB disk**.
 This is a suggested test allocation; storage requirements depend on log volume and retention.
-The installer must run **inside the guest VM**, never in the Proxmox host shell.
+The installer must run **inside the guest CT**, never in the Proxmox host shell.
 
 Download/extract the test bundle, then follow [the installation guide](docs/PROXMOX.md).
-The bundle contains the Linux executable and installer; no GitHub release is needed.
+The bundle contains the Linux executable and installer; the bundle includes the compiled binary.
 It needs internet access for Debian and ClickHouse packages during installation.
 
 ```bash
 sudo bash install-slis.sh
 ```
 
-Open `http://VM-IP:8080`. The installer creates an admin password and saves it in
-`/root/unify-syslog.creds` inside the VM. Change it after signing in.
+Open `http://CT-IP:8080`. The installer creates an admin password and saves it in
+`/root/unify-syslog.creds` inside the CT. Change it after signing in.
 Allow TCP 8080 from administrators and UDP/TCP 514 only from your UniFi devices or VPN.
 Keep ClickHouse ports private. Use the application's HTTPS settings or a TLS reverse proxy
 before accessing the dashboard over untrusted networks.
@@ -59,7 +64,7 @@ Stop with Ctrl+C, then search the dashboard. See [the acceptance checklist](docs
 - `systemctl status unify-syslog clickhouse-server`: service status.
 - `journalctl -u unify-syslog -n 100`: application diagnostics.
 
-Back up both configuration and log storage through the Backup feature. A VM snapshot is useful
+Back up both configuration and log storage through the Backup feature. A CT snapshot is useful
 before testing upgrades but does not replace a verified backup and restore procedure.
 The original binary, service and directory names are retained for upstream compatibility.
 
@@ -73,7 +78,7 @@ npm ci
 npm run build
 cd ..
 go test ./...
-make dist VERSION=0.1.0-beta.1
+make dist VERSION=0.1.0-beta.2
 ```
 
 See [CHANGELOG.md](CHANGELOG.md), [TESTING.md](docs/TESTING.md) and [UPSTREAM.md](UPSTREAM.md).

@@ -7,7 +7,10 @@ on:
 permissions:
   contents: write
 jobs:
+  ct-small:
+    uses: ./.github/workflows/ct-small.yml
   test-and-release:
+    needs: ct-small
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,9 +37,10 @@ jobs:
         run: make dist VERSION="$VERSION"
       - name: Package Proxmox guest installer
         run: |
-          mkdir -p bundle/deploy bundle/docs
+          mkdir -p bundle/deploy bundle/docs bundle/ct
           cp dist/unify-syslog-server_linux_amd64.tar.gz bundle/
           cp deploy/install.sh bundle/deploy/
+          cp ct/slis-unifi-syslog.sh bundle/ct/
           cp install-slis.sh README.md CHANGELOG.md UPSTREAM.md VERSION bundle/
           cp docs/PROXMOX.md docs/TESTING.md bundle/docs/
           (cd bundle && sha256sum unify-syslog-server_linux_amd64.tar.gz deploy/install.sh > checksums.txt)
@@ -51,10 +55,10 @@ jobs:
           prerelease: true
           make_latest: false
           body: |
-            First SLIS Internet Services test release with SLIS branding.
-            Install the slis-unifi-syslog bundle inside a fresh Debian 13 amd64 VM on Proxmox.
+            SLIS small Proxmox CT test release: 2 CPU, 2048 MiB RAM, 1024 MiB swap, 16 GiB disk.
+            Install the slis-unifi-syslog bundle inside a fresh unprivileged Debian 13 amd64 CT on Proxmox.
             Extract it and run sudo bash install-slis.sh. Do not run on the Proxmox host.
-            Linux automated tests pass before this release is published. Exact Proxmox 9.2.21 guest acceptance remains to be completed.
+            Linux unit tests and a 2 CPU / 2 GiB unprivileged container installation smoke test pass before this release is published. Exact Proxmox 9.2.21 guest acceptance remains to be completed.
             See README.md, CHANGELOG.md and docs/PROXMOX.md in the repository.
           files: |
             dist/*.tar.gz

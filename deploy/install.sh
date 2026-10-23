@@ -27,6 +27,15 @@ DATA_DIR="/var/lib/unify-syslog"
 SVC_USER="unify-syslog"
 VERSION="${USS_VERSION:-latest}"
 CH_MODE="${USS_CLICKHOUSE:-local}"
+PROFILE="${USS_PROFILE:-standard}"
+[[ "$PROFILE" == standard || "$PROFILE" == ct-small ]] || { echo "Unknown USS_PROFILE" >&2; exit 1; }
+QUEUE_SIZE=200000; BATCH_SIZE=20000; UDP_BUFFER=8388608
+WORKERS=$(nproc)
+SERVICE_ENV=""
+if [[ "$PROFILE" == ct-small ]]; then
+  QUEUE_SIZE=4096; BATCH_SIZE=1000; WORKERS=1; UDP_BUFFER=1048576
+  SERVICE_ENV=$'Environment=GOMEMLIMIT=192MiB\nEnvironment=GOMAXPROCS=2'
+fi
 MANAGED_DIR="/var/lib/unify-syslog-ch"
 
 c_ok="\e[32m"; c_info="\e[36m"; c_warn="\e[33m"; c_err="\e[31m"; c_off="\e[0m"
@@ -79,7 +88,19 @@ if [[ "$CH_MODE" == local && "$ARCH" == amd64 ]] && ! grep -qw sse4_2 /proc/cpui
   die "The CPU does not support SSE4.2, which ClickHouse requires. In Proxmox, set the VM CPU type to 'host' or 'x86-64-v2-AES'."
 fi
 TOTAL_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-(( TOTAL_MB >= 1800 )) || warn "Only ${TOTAL_MB} MB RAM. 4 GB or more is recommended."
+for limit_file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+  if [[ -r "$limit_file" ]]; then
+    limit=$(cat "$limit_file")
+    if [[ "$limit" =~ ^[0-9]+$ ]] && (( limit / 1048576 < TOTAL_MB )); then
+      TOTAL_MB=$((limit / 1048576))
+    fi
+  fi
+done
+if [[ "$PROFILE" == ct-small ]]; then
+  (( TOTAL_MB >= 2000 )) || die "The ct-small test profile requires 2048 MiB RAM."
+else
+  (( TOTAL_MB >= 1800 )) || warn "Only ${TOTAL_MB} MB RAM. Use USS_PROFILE=ct-small for a 2 GiB test CT."
+fi
 
 # ClickHouse 26.8 and later need AVX2 (Intel Haswell / AMD Zen or newer) and die with
 # "Illegal instruction" on older CPUs such as the Xeon E5 v1/v2. 26.3 LTS still runs there.
@@ -124,6 +145,9 @@ if ! ch_works; then
   if ! run apt-get install -y --allow-downgrades clickhouse-common-static clickhouse-server clickhouse-client; then
     run apt-get install -y -f || true
   fi
+  if [[ "$(systemd-detect-virt -c 2>/dev/null || true)" == lxc ]]; then
+    setcap -r /usr/bin/clickhouse 2>/dev/null || true
+  fi
   if ! ch_works; then
     rc=0; clickhouse local -q 'SELECT 1' >/dev/null 2>&1 || rc=$?
     if (( rc == 132 )); then  # SIGILL
@@ -148,6 +172,23 @@ fi
 CH_HASH="$(echo -n "$CH_PASS" | sha256sum | cut -d' ' -f1)"
 
 MEM_RATIO="${USS_CH_MEMORY_RATIO:-0.5}"
+MARK_CACHE=268435456
+SMALL_SERVER=""; SMALL_PROFILE=""
+if [[ "$PROFILE" == ct-small ]]; then
+  MEM_RATIO=0.65
+  MARK_CACHE=33554432
+  SMALL_SERVER='<max_server_memory_usage>1395864371</max_server_memory_usage>
+  <uncompressed_cache_size>0</uncompressed_cache_size>
+  <background_schedule_pool_size>16</background_schedule_pool_size>
+  <background_pool_size>4</background_pool_size>
+  <max_concurrent_queries>8</max_concurrent_queries>
+  <merge_tree>
+    <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+    <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    <number_of_free_entries_in_pool_to_lower_max_size_of_merge>2</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+  </merge_tree>'
+  SMALL_PROFILE='<profiles><default><max_threads>2</max_threads><max_memory_usage>268435456</max_memory_usage></default></profiles>'
+fi
 install -d -m 0755 /etc/clickhouse-server/config.d /etc/clickhouse-server/users.d
 cat > /etc/clickhouse-server/config.d/unify-syslog.xml <<EOF
 <clickhouse>
@@ -155,7 +196,8 @@ cat > /etc/clickhouse-server/config.d/unify-syslog.xml <<EOF
   <listen_host>127.0.0.1</listen_host>
   <listen_host>::1</listen_host>
   <max_server_memory_usage_to_ram_ratio>${MEM_RATIO}</max_server_memory_usage_to_ram_ratio>
-  <mark_cache_size>268435456</mark_cache_size>
+  <mark_cache_size>${MARK_CACHE}</mark_cache_size>
+  ${SMALL_SERVER}
   <logger><level>warning</level><size>100M</size><count>3</count></logger>
   <!-- Keep system log tables small; they otherwise grow without bound. -->
   <query_log replace="1"><database>system</database><table>query_log</table><ttl>event_date + INTERVAL 3 DAY DELETE</ttl><flush_interval_milliseconds>7500</flush_interval_milliseconds></query_log>
@@ -172,6 +214,7 @@ cat > /etc/clickhouse-server/config.d/unify-syslog.xml <<EOF
 EOF
 cat > /etc/clickhouse-server/users.d/unify-syslog.xml <<EOF
 <clickhouse>
+  ${SMALL_PROFILE}
   <users>
     <default remove="1"/>
     <unify>
@@ -289,13 +332,13 @@ data_dir: ${DATA_DIR}
 syslog:
   udp: ":514"
   tcp: ":514"
-  udp_read_buffer: 8388608
+  udp_read_buffer: ${UDP_BUFFER}
 clickhouse:
 ${CH_YAML}
 ingest:
-  queue_size: 200000
-  workers: $(nproc)
-  batch_size: 20000
+  queue_size: ${QUEUE_SIZE}
+  workers: ${WORKERS}
+  batch_size: ${BATCH_SIZE}
   flush_interval_ms: 1000
 EOF
 fi
@@ -321,6 +364,7 @@ Wants=network-online.target${UNIT_CH}
 [Service]
 User=${SVC_USER}
 Group=${SVC_USER}
+${SERVICE_ENV}
 ExecStart=${APP_DIR}/unify-syslog -c ${CONF_DIR}/config.yaml serve
 Restart=always
 RestartSec=2

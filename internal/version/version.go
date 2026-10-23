@@ -2,7 +2,7 @@
 package version
 
 var (
-	Version   = "0.1.0-beta.1"
+	Version   = "0.1.0-beta.2"
 	Commit    = "none"
 	BuildDate = "unknown"
 	Repo      = "slisinternetservices/slis-unifi-syslog"

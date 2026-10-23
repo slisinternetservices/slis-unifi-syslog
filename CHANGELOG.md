@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.0-beta.2] - 2026-10-23
+
+### Changed
+- Primary target is now an unprivileged Debian 13 Proxmox CT: 2 CPU, 2048 MiB RAM,
+  1024 MiB swap and 16 GiB disk. This replaces the beta.1 VM recommendation.
+- Added a native pct provisioner and a ct-small installer profile.
+- Reduced ingestion buffers, ClickHouse caches/background pools and query parallelism.
+- Added an isolated 2 CPU / 2 GiB container installation and ingestion smoke test.
+- Retention stays configurable; 7 days is recommended for the small test disk.
+
 ## [Unreleased]
 
 - Published the source to the SLIS GitHub repository and added a Linux-tested beta release workflow.

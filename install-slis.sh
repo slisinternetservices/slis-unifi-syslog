@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run inside a NEW Debian 13 amd64 guest, never on the Proxmox host.
+# Run inside a NEW Debian 13 amd64 CT, never on the Proxmox host.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 [[ $EUID -eq 0 ]] || { echo "Run: sudo bash install-slis.sh" >&2; exit 1; }
@@ -9,4 +9,5 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 sha256sum --check checksums.txt
 export USS_LOCAL_TARBALL="$PWD/unify-syslog-server_linux_amd64.tar.gz"
 export USS_NONINTERACTIVE=1
+export USS_PROFILE=ct-small
 bash deploy/install.sh

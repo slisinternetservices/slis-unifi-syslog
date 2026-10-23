@@ -1,0 +1,70 @@
+name: Small unprivileged CT smoke test
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ct-small:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build candidate outside the CT
+        run: |
+          make build VERSION=$(cat VERSION)
+          tar -C bin -czf server.tar.gz unify-syslog
+      - name: Start unprivileged Debian CT with 2 CPU and 2 GiB RAM
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq incus
+          sudo incus admin init --auto
+          sudo iptables -I DOCKER-USER -j ACCEPT || true
+          sudo incus launch images:debian/13 slis -c security.privileged=false -c limits.cpu=2 -c limits.memory=2GiB -c limits.memory.swap=false
+          for i in $(seq 1 60); do sudo incus exec slis -- getent hosts deb.debian.org && break; sleep 2; done
+          sudo incus exec slis -- bash -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates'
+          sudo incus file push deploy/install.sh slis/root/install.sh
+          sudo incus file push server.tar.gz slis/root/server.tar.gz
+      - name: Install full server including local ClickHouse
+        run: |
+          set -o pipefail
+          sudo incus exec slis --env USS_PROFILE=ct-small --env USS_NONINTERACTIVE=1 --env USS_LOCAL_TARBALL=/root/server.tar.gz --env USS_ADMIN_PASSWORD=ct-ci-password -- bash /root/install.sh 2>&1 | tee ct-install.log
+      - name: Verify health, login and persisted syslog
+        run: |
+          sudo incus exec slis -- bash -s <<'SH'
+          set -euo pipefail
+          for i in $(seq 1 60); do curl -fsS localhost:8080/api/health && break; sleep 2; done
+          curl -fsS localhost:8080/api/health
+          systemctl is-active unify-syslog clickhouse-server
+          curl -fsS -c /root/cookies -H 'X-USS: 1' -H 'Content-Type: application/json' -d '{"username":"admin","password":"ct-ci-password"}' localhost:8080/api/auth/login
+          curl -fsS -b /root/cookies localhost:8080/api/auth/status | grep -q '"user"'
+          timeout 15 unify-syslog simulate --target 127.0.0.1:514 --rate 10 --sites 1 || [[ $? == 124 ]]
+          sleep 5
+          rows=$(clickhouse-client --user unify --password "$(cat /etc/unify-syslog/.clickhouse-password)" -q 'SELECT count() FROM unify_syslog.logs')
+          [[ $rows -gt 0 ]]
+          echo "Persisted rows: $rows"
+          grep -q 'queue_size: 4096' /etc/unify-syslog/config.yaml
+          grep -q 'batch_size: 1000' /etc/unify-syslog/config.yaml
+          echo 'Memory after ingestion:'
+          cat /sys/fs/cgroup/memory.current
+          cat /sys/fs/cgroup/memory.peak || true
+          SH
+      - name: Verify restart
+        run: |
+          sudo incus restart slis
+          for i in $(seq 1 60); do sudo incus exec slis -- curl -fsS localhost:8080/api/health && break; sleep 2; done
+          sudo incus exec slis -- curl -fsS localhost:8080/api/health
+      - name: Diagnostics
+        if: always()
+        run: |
+          sudo incus info slis --resources || true
+          sudo incus exec slis -- journalctl -u unify-syslog -u clickhouse-server -n 80 --no-pager || true
+          sudo incus exec slis -- cat /sys/fs/cgroup/memory.events || true

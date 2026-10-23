@@ -33,3 +33,26 @@ This supersedes the earlier Windows-only backend validation limitation above.
 Actual Proxmox guest installation and acceptance testing remain outstanding.
 
 Workflow: https://github.com/slisinternetservices/slis-unifi-syslog/actions/runs/39990936443
+
+## Beta.2 small container validation
+
+Passed in an unprivileged Debian 13 container managed by Incus/LXC on a GitHub
+Ubuntu runner, with 2 CPU and a hard 2 GiB RAM limit, swap disabled:
+
+- Fresh installation of the server and its local ClickHouse database.
+- Application/database health, admin login and authenticated session.
+- 149 simulated syslog messages persisted at 10 messages/second over 15 seconds.
+- Container restart followed by a successful health check.
+- The small queue/batch configuration was verified in the installed config.
+
+Cgroup memory after ingestion: 1,606,684,672 bytes. Recorded peak:
+1,662,599,168 bytes (about 1586 MiB), including filesystem/page cache and installation activity.
+This short smoke test does not measure production capacity, sustained load, or the lowest
+possible resident memory. The supported test profile therefore stays at 2048 MiB.
+The provisioner assigns 1024 MiB swap on Proxmox as an emergency buffer.
+
+Workflow: https://github.com/slisinternetservices/slis-unifi-syslog/actions/runs/40006877500
+
+Actual pct provisioning on the user's Proxmox 9.2.21 host remains untested.
+The Incus test exercises Linux container confinement, service installation and ingestion;
+it is not an execution of the Proxmox host provisioning script.

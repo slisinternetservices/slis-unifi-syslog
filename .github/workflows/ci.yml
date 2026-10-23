@@ -21,4 +21,4 @@ jobs:
       - run: cd web && npm ci && npm run build
       - run: cd web && node scripts/i18n-check.mjs
       - run: go vet ./... && go test ./...
-      - run: bash -n install-slis.sh deploy/install.sh deploy/install-clickhouse.sh ct/unify-syslog-server.sh install/unify-syslog-server-install.sh deploy/install-probe.sh ct/unify-syslog-probe.sh install/unify-syslog-probe-install.sh rpi/build-image.sh
+      - run: bash -n ct/slis-unifi-syslog.sh install-slis.sh deploy/install.sh deploy/install-clickhouse.sh ct/unify-syslog-server.sh install/unify-syslog-server-install.sh deploy/install-probe.sh ct/unify-syslog-probe.sh install/unify-syslog-probe-install.sh rpi/build-image.sh

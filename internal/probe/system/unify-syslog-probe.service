@@ -1,0 +1,26 @@
+[Unit]
+Description=UniFi Syslog probe
+Documentation=https://github.com/rhisijmuiden/unifi-syslog-server
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+User=unify-probe
+Group=unify-probe
+# Create the service user and directories first (also on a fresh image).
+ExecStartPre=+/usr/bin/systemd-sysusers /usr/lib/sysusers.d/unify-syslog-probe.conf
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/unify-syslog-probe.conf
+ExecStart=/opt/unify-syslog-probe/unify-syslog-probe run
+Restart=always
+RestartSec=3
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/unify-syslog-probe /opt/unify-syslog-probe
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

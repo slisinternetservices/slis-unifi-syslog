@@ -1,0 +1,19 @@
+# Prometheus scrape configuration for UniFi Syslog Server.
+# Add the job below under scrape_configs in prometheus.yml.
+#
+# Create a read-only API token under Account > API tokens and store it in a
+# file Prometheus can read, e.g. /etc/prometheus/unifi-syslog.token. Or allow
+# Prometheus's address without a token under Administration > Metrics & Grafana.
+scrape_configs:
+  - job_name: unifi-syslog
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true   # only with the built-in self-signed certificate
+    authorization:
+      credentials_file: /etc/prometheus/unifi-syslog.token
+    static_configs:
+      - targets:
+          - SYSLOG-SERVER:8080
+          # With high availability, list both nodes, not the virtual IP:
+          # - syslog-node-a:8080
+          # - syslog-node-b:8080

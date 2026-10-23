@@ -1,0 +1,2 @@
+UniFi Syslog probe - web page: http://\4:8080  (enroll it there, or sign in and run: sudo unify-syslog-probe setup)
+

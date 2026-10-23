@@ -1,0 +1,500 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# UniFi Syslog\nEvents forwarded by **UniFi Syslog Server** to `UnifiSyslog_CL` and, in split table mode, firewall and IPS events in `CommonSecurityLog` (DeviceVendor Ubiquiti, DeviceProduct UniFi). Both tables are combined in every query."
+      },
+      "name": "intro"
+    },
+    {
+      "type": 9,
+      "name": "parameters",
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "crossComponentResources": [],
+        "style": "pills",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "parameters": [
+          {
+            "id": "3c1f6a3e-2b7e-4f55-9a0e-0d1f2a3b4c01",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "value": {
+              "durationMs": 86400000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 3600000
+                },
+                {
+                  "durationMs": 14400000
+                },
+                {
+                  "durationMs": 43200000
+                },
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 259200000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 1209600000
+                },
+                {
+                  "durationMs": 2592000000
+                }
+              ],
+              "allowCustom": true
+            }
+          },
+          {
+            "id": "3c1f6a3e-2b7e-4f55-9a0e-0d1f2a3b4c02",
+            "version": "KqlParameterItem/1.0",
+            "name": "Site",
+            "label": "Site",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "union isfuzzy=true (UnifiSyslog_CL | where TimeGenerated {TimeRange} | project Site),\n    (CommonSecurityLog | where TimeGenerated {TimeRange} | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\" | project Site = DeviceCustomString1)\n| where isnotempty(Site)\n| summarize by Site\n| order by Site asc",
+            "value": [
+              "value::all"
+            ],
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "selectAllValue": "*",
+              "showDefault": false
+            },
+            "timeContext": {
+              "durationMs": 86400000
+            },
+            "timeContextFromParameter": "TimeRange",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces"
+          }
+        ]
+      }
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Overview"
+      },
+      "name": "h-overview"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| summarize Events = count(), ['Firewall blocks'] = countif(Category == \"firewall\" and Action == \"block\"), ['IPS alerts'] = countif(Category == \"ips\"),\n    ['Sign-in failures'] = countif(Action == \"fail\" and Category in (\"auth\", \"admin\", \"vpn\", \"access\")), Devices = dcount(Hostname), Sites = dcount(Site)\n| evaluate narrow()\n| project Metric = Column, Count = tolong(Value)",
+        "size": 4,
+        "title": "Overview",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Count",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            },
+            "numberFormat": {
+              "unit": 17,
+              "options": {
+                "maximumSignificantDigits": 3
+              }
+            }
+          },
+          "showBorder": false
+        }
+      },
+      "name": "overview-tiles",
+      "customWidth": "100"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| summarize count() by Category, bin(TimeGenerated, {TimeRange:grain})",
+        "size": 0,
+        "title": "Events over time by category",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "events-by-category",
+      "customWidth": "100"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Firewall blocks"
+      },
+      "name": "h-firewall"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"firewall\" and Action == \"block\"\n| summarize count() by bin(TimeGenerated, {TimeRange:grain}), Site",
+        "size": 0,
+        "title": "Blocked packets over time",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "fw-over-time",
+      "customWidth": "100"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"firewall\" and Action == \"block\"\n| summarize Blocks = count(), Ports = dcount(DstPort), Country = take_any(SrcCountry) by SrcIp\n| top 20 by Blocks",
+        "size": 0,
+        "title": "Top blocked sources",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "fw-top-sources",
+      "customWidth": "33"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"firewall\" and Action == \"block\" and isnotempty(SrcCountry)\n| summarize count() by SrcCountry\n| top 10 by count_",
+        "size": 0,
+        "title": "Top source countries of blocked traffic",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "piechart"
+      },
+      "name": "fw-src-countries",
+      "customWidth": "33"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"firewall\" and Action == \"block\" and isnotempty(DstCountry)\n| summarize count() by DstCountry\n| top 10 by count_",
+        "size": 0,
+        "title": "Top destination countries of blocked traffic",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "piechart"
+      },
+      "name": "fw-dst-countries",
+      "customWidth": "33"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"firewall\" and Action == \"block\" and isnotnull(DstPort)\n| summarize Blocks = count() by Port = strcat(tostring(DstPort), \"/\", Protocol)\n| top 15 by Blocks",
+        "size": 0,
+        "title": "Top blocked destination ports",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart"
+      },
+      "name": "fw-top-ports",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"firewall\" and isnotempty(Rule)\n| summarize Hits = count() by Rule, Action\n| top 15 by Hits",
+        "size": 0,
+        "title": "Top firewall rules",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "fw-top-rules",
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## IPS alerts"
+      },
+      "name": "h-ips"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"ips\"\n| summarize count() by Action, bin(TimeGenerated, {TimeRange:grain})",
+        "size": 0,
+        "title": "IPS alerts over time",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "ips-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"ips\"\n| summarize Alerts = count(), Blocked = countif(Action == \"block\"), Sources = dcount(SrcIp), MinSeverity = min(Severity) by Rule\n| top 20 by Alerts",
+        "size": 0,
+        "title": "Top IPS signatures",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "ips-top-rules",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"ips\"\n| summarize Alerts = count(), Signatures = dcount(Rule), Country = take_any(SrcCountry) by SrcIp, DstIp\n| top 20 by Alerts",
+        "size": 0,
+        "title": "IPS alerts by source",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "ips-by-source",
+      "customWidth": "100"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## VPN and admin sign-ins"
+      },
+      "name": "h-signin"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category in (\"auth\", \"admin\", \"vpn\") and Action in (\"fail\", \"allow\") or EventType in (\"connected\", \"auth_failed\")\n| extend Result = iff(Action == \"fail\" or EventType == \"auth_failed\", \"failed\", \"succeeded\")\n| summarize count() by strcat(Category, \" \", Result), bin(TimeGenerated, {TimeRange:grain})",
+        "size": 0,
+        "title": "Sign-in results over time",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "signin-over-time",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Action == \"fail\" and Category in (\"auth\", \"admin\", \"vpn\")\n| summarize Failures = count(), Devices = dcount(Hostname), Country = take_any(SrcCountry), Last = max(TimeGenerated) by SrcIp, Category\n| top 20 by Failures",
+        "size": 0,
+        "title": "Failed sign-ins by source",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "signin-failures",
+      "customWidth": "50"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Wi-Fi"
+      },
+      "name": "h-wifi"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"wifi\"\n| summarize count() by EventType\n| top 10 by count_",
+        "size": 0,
+        "title": "Wi-Fi events by type",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "piechart"
+      },
+      "name": "wifi-types",
+      "customWidth": "33"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"wifi\" and isnotempty(Ssid)\n| summarize count() by Ssid, bin(TimeGenerated, {TimeRange:grain})",
+        "size": 0,
+        "title": "Wi-Fi events by SSID",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "wifi-ssid",
+      "customWidth": "33"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"wifi\" and (EventType in (\"auth_failed\", \"deauthenticated\") or Action == \"fail\")\n| summarize Events = count(), Aps = dcount(Hostname) by ClientMac, ClientName\n| top 20 by Events",
+        "size": 0,
+        "title": "Clients with most Wi-Fi failures",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "wifi-failures",
+      "customWidth": "33"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Device health"
+      },
+      "name": "h-devices"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category == \"switch\" and EventType in (\"link_down\", \"loop_detected\")\n| summarize Events = count(), Last = max(TimeGenerated) by Site, Hostname, EventType\n| top 25 by Events",
+        "size": 0,
+        "title": "Switch link down",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "switch-link-down",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Category in (\"device\", \"switch\", \"system\")\n| summarize count() by Hostname, bin(TimeGenerated, {TimeRange:grain})",
+        "size": 0,
+        "title": "Device events over time",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart"
+      },
+      "name": "device-events",
+      "customWidth": "50"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let UniFi = union isfuzzy=true\n    (UnifiSyslog_CL\n    | project TimeGenerated, Site, Hostname, DeviceName, Category, EventType, Action, Rule, Severity, SrcIp, SrcPort, DstIp, DstPort, Protocol, SrcCountry, DstCountry, ClientMac, ClientName, Ssid, Message),\n    (CommonSecurityLog\n    | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\"\n    | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, DeviceName, Category = DeviceEventCategory,\n        EventType = coalesce(extract(@\"(?:^|;)event_type=([^;]*)\", 1, AdditionalExtensions), \"packet\"), Action = DeviceAction, Rule = DeviceEventClassID,\n        Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n        SrcIp = SourceIP, SrcPort = SourcePort, DstIp = DestinationIP, DstPort = DestinationPort, Protocol = tolower(Protocol),\n        SrcCountry = extract(@\"(?:^|;)src_country=([^;]*)\", 1, AdditionalExtensions), DstCountry = extract(@\"(?:^|;)dst_country=([^;]*)\", 1, AdditionalExtensions),\n        ClientMac = SourceMACAddress, ClientName = \"\", Ssid = \"\", Message)\n| where TimeGenerated {TimeRange}\n| where '*' in ({Site}) or Site in ({Site});\nUniFi\n| where Severity <= 4\n| summarize Events = count(), Categories = make_set(Category, 10), Last = max(TimeGenerated) by Site, Hostname\n| top 25 by Events",
+        "size": 0,
+        "title": "Errors and warnings by device",
+        "timeContext": {
+          "durationMs": 86400000
+        },
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "device-errors",
+      "customWidth": "100"
+    }
+  ],
+  "fallbackResourceIds": [],
+  "fromTemplateId": "sentinel-UniFiSyslog",
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

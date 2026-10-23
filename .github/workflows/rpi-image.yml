@@ -1,0 +1,76 @@
+name: rpi-image
+
+# Builds the Raspberry Pi image on an arm64 runner and boots its userland
+# with systemd-nspawn: the probe must start, create its service user and
+# answer on its web page. The release workflow builds the same image.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['rpi/**', 'internal/probe/**', 'cmd/unify-syslog-probe/**', '.github/workflows/rpi-image.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the probe
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOARCH=arm64 go build -trimpath -ldflags "-s -w -X github.com/rhisijmuiden/unify-syslog-server/internal/version.Version=0.0.0-ci" -o dist/unify-syslog-probe ./cmd/unify-syslog-probe
+          tar -C dist -czf dist/unify-syslog-probe_linux_arm64.tar.gz unify-syslog-probe
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq systemd-container xz-utils file
+      - name: Build image (kept mounted for the boot test)
+        run: |
+          set -o pipefail
+          sudo KEEP_MOUNTED=1 rpi/build-image.sh dist/unify-syslog-probe_linux_arm64.tar.gz dist/unify-syslog-probe dist/unify-syslog-probe-rpi-arm64.img.xz | tee build.txt
+          echo "WORK=$(grep '^WORK=' build.txt | cut -d= -f2)" >> "$GITHUB_ENV"
+          echo "LOOP=$(grep '^LOOP=' build.txt | cut -d= -f2)" >> "$GITHUB_ENV"
+      - name: Boot the image with systemd-nspawn
+        run: |
+          R="$WORK/root"
+          # mktemp made the work directory root-only; the checks below run as the runner user.
+          sudo chmod 0755 "$WORK"
+          test -x "$R/opt/unify-syslog-probe/unify-syslog-probe"
+          test -L "$R/etc/systemd/system/multi-user.target.wants/unify-syslog-probe.service"
+          # A damaged key on the boot partition must be reported, not crash the probe.
+          echo uss1_not-a-real-key | sudo tee "$R/boot/firmware/uss-probe.txt" >/dev/null
+          sudo systemd-nspawn -q -D "$R" --boot --machine=uss-probe > boot.txt 2>&1 &
+          # Without real hardware some Pi services fail and the network wait times out, so booting takes minutes.
+          for i in $(seq 1 240); do curl -fsS localhost:8080/api/status > status.json 2>/dev/null && break; sleep 2; done
+          cat status.json
+          python3 -c "import json,sys; s=json.load(open('status.json')); print(s['version'], s['status']['listen']); sys.exit(0 if s['version']=='0.0.0-ci' and not s['enrolled'] else 1)"
+          curl -fsS localhost:8080/ | grep -q 'UniFi Syslog probe'
+          sudo grep -q '^unify-probe:' "$R/etc/passwd"
+          sudo systemd-run -M uss-probe --wait -q -P systemctl is-active unify-syslog-probe
+          sudo systemd-run -M uss-probe --wait -q -P journalctl -u unify-syslog-probe --no-pager | tee probe-journal.txt
+          grep -q 'uss-probe.txt' probe-journal.txt
+          echo '<14>test message' > /dev/udp/127.0.0.1/514
+          sleep 2
+          curl -fsS localhost:8080/api/status | python3 -c "import json,sys; s=json.load(sys.stdin); sys.exit(0 if s['status']['buffer_records']>=1 else 1)"
+          sudo machinectl poweroff uss-probe || true
+          sleep 5
+      - name: Compress image
+        run: |
+          sudo rm -f "$WORK/root/boot/firmware/uss-probe.txt" "$WORK/root/var/lib/unify-syslog-probe" -r
+          sudo umount -R "$WORK/root"
+          sudo losetup -d "$LOOP"
+          xz -T0 -1 -c "$WORK/probe.img" > dist/unify-syslog-probe-rpi-arm64.img.xz
+          ls -la dist
+      - name: Diagnostics
+        if: always()
+        run: |
+          { echo '===== build'; cat build.txt; echo '===== boot'; tail -n 150 boot.txt
+            echo '===== journal'; cat probe-journal.txt || sudo journalctl -M uss-probe -u unify-syslog-probe --no-pager -n 100
+            echo '===== status'; cat status.json; } > diag.txt 2>&1 || true
+          cat diag.txt
+          git config user.name ci; git config user.email ci@localhost
+          git checkout -q --orphan diag && git rm -rqf --cached . && git add -f diag.txt
+          git commit -qm "diagnostics ${GITHUB_RUN_ID}" && git push -fq origin HEAD:refs/heads/ci-diagnostics-rpi

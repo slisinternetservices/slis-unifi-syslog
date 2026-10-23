@@ -1,0 +1,321 @@
+name: install-test
+
+# Runs deploy/install.sh inside a fresh, unprivileged Debian 13 system container
+# (Incus/LXC, like a Proxmox CT) with systemd, then checks that the app answers.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['deploy/**', 'install/**', 'ct/**', 'cmd/unify-syslog-probe/**', 'internal/probe/**', 'internal/probehub/**', 'internal/probeproto/**', 'internal/api/probes.go', 'internal/ha/**', 'internal/api/ha.go', 'internal/api/storage.go', '.github/workflows/install-test.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  lxc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [fresh, repair]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Incus
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq incus
+          sudo incus admin init --auto
+          # Docker's FORWARD drop policy breaks container networking.
+          sudo iptables -I DOCKER-USER -j ACCEPT || true
+      - name: Start unprivileged Debian 13 container
+        run: |
+          sudo incus launch images:debian/13 ct -c security.privileged=false -c limits.memory=4GiB
+          for i in $(seq 1 60); do sudo incus exec ct -- getent hosts deb.debian.org && break; sleep 2; done
+          sudo incus exec ct -- bash -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates'
+          sudo incus file push deploy/install.sh ct/root/install.sh
+      - name: Run installer
+        run: sudo incus exec ct --env USS_NONINTERACTIVE=1 -- bash /root/install.sh 2>&1 | tee install-out.txt; exit ${PIPESTATUS[0]}
+      - name: Repair a half-configured install with a pinned older ClickHouse
+        if: matrix.scenario == 'repair'
+        run: |
+          # Mimic a postinst that died (as with "Illegal instruction" on CPUs without AVX2).
+          sudo incus exec ct -- sed -i '/^Package: clickhouse-server$/,/^$/s/^Status: install ok installed/Status: install ok half-configured/' /var/lib/dpkg/status
+          set -o pipefail
+          sudo incus exec ct --env USS_NONINTERACTIVE=1 --env USS_CH_VERSION='26.3.*' -- bash /root/install.sh 2>&1 | tee -a install-out.txt
+          sudo incus exec ct -- curl -fsS localhost:8080/api/health
+          sudo incus exec ct -- clickhouse local -q 'SELECT version()' | tee -a install-out.txt | grep -q '^26\.3\.'
+      - name: Check app
+        run: |
+          sudo incus exec ct -- bash -c 'for i in $(seq 1 30); do curl -fsS localhost:8080/api/health && exit 0; sleep 2; done; exit 1'
+          sudo incus exec ct -- systemctl is-active clickhouse-server unify-syslog
+          # The server may write ClickHouse configuration (cold storage) and ClickHouse reads it.
+          sudo incus exec ct -- runuser -u unify-syslog -- test -w /var/lib/unify-syslog-ch/storage.xml
+          sudo incus exec ct -- runuser -u clickhouse -- test -r /etc/clickhouse-server/config.d/zz-unify-syslog-managed.xml
+          sudo incus exec ct -- bash -c 'clickhouse-client --user unify --password "$(cat /etc/unify-syslog/.clickhouse-password)" -q "SYSTEM RELOAD CONFIG"'
+      - name: Diagnostics
+        if: always()
+        run: |
+          sudo incus exec ct -- bash -c 'tail -n 80 /var/log/unify-syslog-install.log; journalctl -u clickhouse-server -u unify-syslog --no-pager -n 60; df -h /; dmesg 2>/dev/null | tail -20' > diag.txt 2>&1 || true
+          { echo '===== installer output'; cat install-out.txt 2>/dev/null; echo '===== host dmesg'; sudo dmesg | tail -40; } >> diag.txt
+          cat diag.txt
+          git config user.name ci; git config user.email ci@localhost
+          git checkout -q --orphan diag && git rm -rqf --cached . && git add -f diag.txt
+          git commit -qm "diagnostics ${GITHUB_RUN_ID}" && git push -fq origin HEAD:refs/heads/ci-diagnostics-${{ matrix.scenario }}
+
+  # A standalone ClickHouse (deploy/install-clickhouse.sh) and two servers built
+  # from this commit that store their logs there, paired for high availability
+  # with keepalived: settings copy, and the virtual IP moving when the active
+  # node stops.
+  ha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build release tarballs
+        run: make dist VERSION=0.0.0-ci
+      - name: Install Incus
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq incus
+          sudo incus admin init --auto
+          sudo iptables -I DOCKER-USER -j ACCEPT || true
+      - name: Start containers
+        run: |
+          sudo incus launch images:debian/13 chdb -c security.privileged=false -c limits.memory=4GiB
+          for ct in n1 n2; do sudo incus launch images:debian/13 $ct -c security.privileged=false -c limits.memory=2GiB; done
+          for ct in chdb n1 n2; do
+            for i in $(seq 1 60); do sudo incus exec $ct -- getent hosts deb.debian.org && break; sleep 2; done
+            sudo incus exec $ct -- bash -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates'
+          done
+          sudo incus file push deploy/install-clickhouse.sh chdb/root/install-clickhouse.sh
+          for ct in n1 n2; do
+            sudo incus file push deploy/install.sh $ct/root/install.sh
+            sudo incus file push dist/unify-syslog-server_linux_amd64.tar.gz $ct/root/server.tar.gz
+          done
+          for ct in chdb n1 n2; do echo "IP_${ct^^}=$(sudo incus list $ct -c4 --format csv | cut -d' ' -f1)" >> "$GITHUB_ENV"; done
+      - name: Install the standalone ClickHouse
+        run: |
+          set -o pipefail
+          sudo incus exec chdb --env USS_NONINTERACTIVE=1 --env USS_CH_PASSWORD=ci-ch-password --env USS_CH_ALLOW=0.0.0.0/0 -- bash /root/install-clickhouse.sh 2>&1 | tee chdb-out.txt
+      - name: Install both servers against it
+        run: |
+          set -o pipefail
+          for ct in n1 n2; do
+            sudo incus exec $ct --env USS_NONINTERACTIVE=1 --env USS_LOCAL_TARBALL=/root/server.tar.gz --env USS_ADMIN_PASSWORD=ci-admin-password \
+              --env USS_CLICKHOUSE=external --env USS_CH_ADDR=$IP_CHDB:9000 --env USS_CH_HTTP_URL=http://$IP_CHDB:8123 \
+              --env USS_CH_USER=unify --env USS_CH_PASSWORD=ci-ch-password -- bash /root/install.sh 2>&1 | tee $ct-out.txt
+            sudo incus exec $ct -- bash -c 'for i in $(seq 1 30); do curl -fsS localhost:8080/api/health && exit 0; sleep 2; done; exit 1'
+            # No local ClickHouse.
+            ! sudo incus exec $ct -- systemctl is-active clickhouse-server
+          done
+          sudo incus exec chdb -- clickhouse-client --user unify --password ci-ch-password -q "EXISTS TABLE unify_syslog.logs" | grep -q 1
+      - name: Pair the servers
+        run: |
+          cat > api <<'EOF'
+          #!/bin/sh
+          # api METHOD PATH [JSON]: the web API as admin (signs in when needed).
+          curl -fsS -b /root/cj localhost:8080/api/auth/status | grep -q '"user"' ||
+            curl -fsS -c /root/cj -H "X-USS: 1" -H "Content-Type: application/json" -d '{"username":"admin","password":"ci-admin-password"}' localhost:8080/api/auth/login >/dev/null
+          if [ -n "$3" ]; then exec curl -sS -b /root/cj -H "X-USS: 1" -H "Content-Type: application/json" -X "$1" -d "$3" "localhost:8080/api$2"; fi
+          exec curl -sS -b /root/cj -H "X-USS: 1" -X "$1" "localhost:8080/api$2"
+          EOF
+          for ct in n1 n2; do sudo incus file push --mode 0755 api $ct/root/api; done
+          VIP=${IP_N1%.*}.250
+          echo "VIP=$VIP" >> "$GITHUB_ENV"
+          # keepalived gives the virtual IP to the first node; until it runs, add it by hand.
+          sudo incus exec n1 -- ip addr add $VIP/24 dev eth0
+          sudo incus exec n1 -- /root/api PUT /settings/ha "{\"action\":\"start\",\"node_name\":\"n1\",\"self_url\":\"https://$IP_N1:8080\",\"vip\":\"$VIP/24\",\"interface\":\"eth0\",\"priority\":110}" | tee start.json
+          sudo incus exec n1 -- /root/api GET /settings/ha > ha1.json
+          CODE=$(python3 -c "import json; print(json.load(open('ha1.json'))['code'])")
+          sudo incus exec n2 -- /root/api PUT /settings/ha "{\"action\":\"join\",\"node_name\":\"n2\",\"self_url\":\"https://$IP_N2:8080\",\"interface\":\"eth0\",\"priority\":100,\"code\":\"$CODE\"}" | tee join.json
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('join.json'))['restart'] else 1)"
+      - name: Standby copies the settings of the active node
+        run: |
+          sudo incus exec n1 -- /root/api GET /settings/general > gen.json
+          python3 -c "import json; g=json.load(open('gen.json')); g['instance_name']='CI pair'; print(json.dumps(g))" > gen2.json
+          sudo incus exec n1 -- /root/api PUT /settings/general "$(cat gen2.json)" > /dev/null
+          for i in $(seq 1 60); do
+            sudo incus exec n2 -- rm -f /root/cj
+            sudo incus exec n2 -- /root/api GET /settings/ha > ha2.json 2>/dev/null || true
+            sudo incus exec n2 -- curl -fsS localhost:8080/api/auth/status > st2.json 2>/dev/null || true
+            python3 -c "import json,sys; h=json.load(open('ha2.json'))['state']; s=json.load(open('st2.json')); print(h['active'], h['peer'].get('error'), s['instance']); sys.exit(0 if not h['active'] and not h['peer']['error'] and s['instance']=='CI pair' else 1)" && break
+            sleep 3
+          done
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('st2.json'))['instance']=='CI pair' else 1)"
+          # Changes on the standby are refused.
+          sudo incus exec n2 -- /root/api PUT /settings/general "$(cat gen2.json)" | tee standby.json | grep -q 'standby node'
+      - name: Run keepalived from the generated configuration
+        run: |
+          sudo incus exec n1 -- ip addr del $VIP/24 dev eth0
+          for ct in n1 n2; do
+            sudo incus exec $ct -- /root/api GET /settings/ha > ha-$ct.json
+            python3 -c "import json; print(json.load(open('ha-$ct.json'))['keepalived'])" > keepalived-$ct.conf
+            cat keepalived-$ct.conf
+            grep -q unicast_peer keepalived-$ct.conf
+            sudo incus exec $ct -- bash -c 'apt-get install -y -qq keepalived >/dev/null'
+            sudo incus file push keepalived-$ct.conf $ct/etc/keepalived/keepalived.conf
+            sudo incus exec $ct -- systemctl restart keepalived
+          done
+          holder() { for ct in n1 n2; do sudo incus exec $ct -- ip -4 addr show eth0 | grep -q " $VIP/" && echo $ct; done; return 0; }
+          for i in $(seq 1 30); do h=$(holder); [ -n "$h" ] && break; sleep 2; done
+          echo "virtual IP on: $h"; [ "$(echo $h | wc -w)" = 1 ]
+          echo "FIRST=$h" >> "$GITHUB_ENV"
+      - name: The virtual IP and the jobs move when the active node stops
+        run: |
+          OTHER=n2; [ "$FIRST" = n2 ] && OTHER=n1
+          sudo incus exec $FIRST -- systemctl stop unify-syslog
+          for i in $(seq 1 30); do sudo incus exec $OTHER -- ip -4 addr show eth0 | grep -q " $VIP/" && break; sleep 2; done
+          sudo incus exec $OTHER -- ip -4 addr show eth0 | grep " $VIP/"
+          for i in $(seq 1 15); do
+            sudo incus exec $OTHER -- /root/api GET /settings/ha > haf.json
+            python3 -c "import json,sys; sys.exit(0 if json.load(open('haf.json'))['state']['active'] else 1)" && break
+            sleep 2
+          done
+          python3 -c "import json,sys; sys.exit(0 if json.load(open('haf.json'))['state']['active'] else 1)"
+          sudo incus exec $OTHER -- bash -c "echo '<14>Oct 19 10:00:00 U6-Pro,f4e2c6000001,v6.6.55 hostapd: ath0: STA aa:bb:cc:dd:ee:09 IEEE 802.11: associated (failover)' > /dev/udp/$VIP/514"
+          for i in $(seq 1 20); do
+            n=$(sudo incus exec chdb -- clickhouse-client --user unify --password ci-ch-password -q "SELECT count() FROM unify_syslog.logs WHERE message LIKE '%(failover)%'")
+            [ "$n" -ge 1 ] && break; sleep 2
+          done
+          [ "$n" -ge 1 ]
+      - name: Diagnostics
+        if: always()
+        run: |
+          { for f in chdb-out.txt n1-out.txt n2-out.txt start.json join.json ha2.json standby.json haf.json; do echo "===== $f"; cat $f 2>/dev/null; done
+            for ct in n1 n2; do echo "===== $ct journal"; sudo incus exec $ct -- journalctl -u unify-syslog -u keepalived --no-pager -n 80; done
+            echo '===== chdb journal'; sudo incus exec chdb -- journalctl -u clickhouse-server --no-pager -n 40; } > diag.txt 2>&1 || true
+          cat diag.txt
+          git config user.name ci; git config user.email ci@localhost
+          git checkout -q --orphan diag && git rm -rqf --cached . && git add -f diag.txt
+          git commit -qm "diagnostics ${GITHUB_RUN_ID}" && git push -fq origin HEAD:refs/heads/ci-diagnostics-ha
+
+  # A main server built from this commit (Debian 13 container) and a probe in a
+  # second container, installed with deploy/install-probe.sh and an enrollment
+  # key: download from the main server, enrollment, forwarding, buffering
+  # during an outage and an update pushed by the main server.
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build release tarballs
+        run: |
+          make dist VERSION=0.0.0-ci
+          # An older probe, to see the main server update it.
+          CGO_ENABLED=0 go build -ldflags "-X github.com/rhisijmuiden/unify-syslog-server/internal/version.Version=0.0.0-old" -o old/unify-syslog-probe ./cmd/unify-syslog-probe
+      - name: Install Incus
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq incus
+          sudo incus admin init --auto
+          sudo iptables -I DOCKER-USER -j ACCEPT || true
+      - name: Start main server and probe containers
+        run: |
+          sudo incus launch images:debian/13 main -c security.privileged=false -c limits.memory=4GiB
+          sudo incus launch images:debian/13 probe -c security.privileged=false -c limits.memory=1GiB
+          for ct in main probe; do
+            for i in $(seq 1 60); do sudo incus exec $ct -- getent hosts deb.debian.org && break; sleep 2; done
+            sudo incus exec $ct -- bash -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates'
+          done
+          sudo incus file push deploy/install.sh main/root/install.sh
+          sudo incus file push dist/unify-syslog-server_linux_amd64.tar.gz main/root/server.tar.gz
+          sudo incus file push deploy/install-probe.sh probe/root/install-probe.sh
+          sudo incus file push old/unify-syslog-probe probe/root/unify-syslog-probe-old
+      - name: Install main server
+        run: |
+          set -o pipefail
+          sudo incus exec main --env USS_NONINTERACTIVE=1 --env USS_LOCAL_TARBALL=/root/server.tar.gz --env USS_ADMIN_PASSWORD=ci-admin-password -- bash /root/install.sh 2>&1 | tee main-out.txt
+          # The probe release of this version, as the main server would fetch it from GitHub.
+          sudo incus exec main -- install -d -o unify-syslog -g unify-syslog /var/lib/unify-syslog/probes/releases/0.0.0-ci
+          for f in dist/unify-syslog-probe_linux_*.tar.gz dist/checksums.txt; do sudo incus file push "$f" main/var/lib/unify-syslog/probes/releases/0.0.0-ci/; done
+          sudo incus exec main -- chown -R unify-syslog:unify-syslog /var/lib/unify-syslog/probes
+          printf '#!/bin/sh\nexec clickhouse-client --user unify --password "$(cat /etc/unify-syslog/.clickhouse-password)" -q "$1"\n' > chq
+          sudo incus file push --mode 0755 chq main/root/chq
+      - name: Create probe on the main server
+        run: |
+          MAIN_IP=$(sudo incus list main -c4 --format csv | cut -d' ' -f1)
+          echo "MAIN_IP=$MAIN_IP" >> "$GITHUB_ENV"
+          sudo incus exec main -- bash -c '
+            for i in $(seq 1 30); do curl -fsS localhost:8080/api/health && break; sleep 2; done
+            curl -fsS -c /root/cj -H "X-USS: 1" -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"ci-admin-password\"}" localhost:8080/api/auth/login >/dev/null
+            # The web port answers HTTPS as well.
+            curl -fsSk https://localhost:8080/api/health'
+          sudo incus exec main -- curl -fsS -b /root/cj -H "X-USS: 1" -H "Content-Type: application/json" \
+            -d "{\"name\":\"CI probe\",\"site\":\"ci-site\",\"server_url\":\"https://$MAIN_IP:8080\",\"settings\":{\"udp\":\":514\",\"tcp\":\":514\",\"buffer_mb\":64,\"buffer_hours\":24}}" \
+            localhost:8080/api/probes > enroll.json
+          python3 -c "import json; print(json.load(open('enroll.json'))['key'])" > key.txt
+      - name: Install probe with the enrollment key
+        run: |
+          set -o pipefail
+          sudo incus exec probe --env USS_NONINTERACTIVE=1 --env USS_PROBE_KEY="$(cat key.txt)" -- bash /root/install-probe.sh 2>&1 | tee probe-out.txt
+          for i in $(seq 1 20); do
+            sudo incus exec probe -- unify-syslog-probe status | grep -q '^State: *connected' && break; sleep 2
+          done
+          sudo incus exec probe -- unify-syslog-probe status | tee -a probe-out.txt | grep -q '^State: *connected'
+          sudo incus exec probe -- unify-syslog-probe version | grep -q ' 0.0.0-ci '
+          sudo incus exec probe -- systemctl is-active unify-syslog-probe
+          sudo incus exec probe -- id unify-probe
+      - name: Forward syslog through the probe
+        run: |
+          sudo incus exec probe -- bash -c 'for i in $(seq 1 50); do echo "<14>Oct 18 10:00:00 U6-Pro,f4e2c6000001,v6.6.55 hostapd: ath0: STA aa:bb:cc:dd:ee:01 IEEE 802.11: associated (ci $i)" > /dev/udp/127.0.0.1/514; done'
+          sudo incus exec probe -- bash -c 'exec 3<>/dev/tcp/127.0.0.1/514; for i in $(seq 1 50); do echo "<14>Oct 18 10:00:00 USW-24,f4e2c6000002,v7.1.26 switch: port 1 link up (tcp $i)" >&3; done; exec 3>&-'
+          for i in $(seq 1 30); do
+            n=$(sudo incus exec main -- /root/chq "SELECT count() FROM unify_syslog.logs WHERE site = 'ci-site' AND fields['probe'] = 'CI probe'")
+            echo "stored: $n"; [[ "$n" -ge 100 ]] && break; sleep 3
+          done
+          [[ "$n" -ge 100 ]]
+      - name: Buffer during an outage of the main server
+        run: |
+          sudo incus exec main -- systemctl stop unify-syslog
+          sudo incus exec probe -- bash -c 'for i in $(seq 1 200); do echo "<14>Oct 18 10:00:00 U6-Pro,f4e2c6000001,v6.6.55 hostapd: ath0: STA aa:bb:cc:dd:ee:02 IEEE 802.11: disassociated (outage $i)" > /dev/udp/127.0.0.1/514; done'
+          sleep 5
+          sudo incus exec probe -- unify-syslog-probe status | tee -a probe-out.txt | grep -E '^Buffered: *200 '
+          sudo incus exec main -- systemctl start unify-syslog
+          for i in $(seq 1 60); do
+            n=$(sudo incus exec main -- /root/chq "SELECT uniqExact(message), count() FROM unify_syslog.logs WHERE message LIKE '%(outage %'" 2>/dev/null || true)
+            echo "outage messages (distinct, total): $n"; [[ "$n" == $'200\t200' ]] && break; sleep 3
+          done
+          [[ "$n" == $'200\t200' ]]
+      - name: Update pushed by the main server
+        run: |
+          # Put an older probe in place; automatic updates bring it back to the server's version.
+          sudo incus exec probe -- bash -c 'install -o unify-probe -g unify-probe -m 0755 /root/unify-syslog-probe-old /opt/unify-syslog-probe/unify-syslog-probe && systemctl restart unify-syslog-probe'
+          sudo incus exec probe -- unify-syslog-probe version | grep -q ' 0.0.0-old '
+          for i in $(seq 1 40); do
+            sudo incus exec probe -- unify-syslog-probe version | grep -q ' 0.0.0-ci ' && break; sleep 3
+          done
+          sudo incus exec probe -- unify-syslog-probe version | tee -a probe-out.txt | grep -q ' 0.0.0-ci '
+          for i in $(seq 1 30); do
+            sudo incus exec main -- curl -fsS -b /root/cj localhost:8080/api/probes > probes.json
+            python3 -c "import json,sys; p=json.load(open('probes.json'))['probes'][0]; print(p['version'], p['update_state'], p['online']); sys.exit(0 if p['version']=='0.0.0-ci' and p['online'] else 1)" && break
+            sleep 3
+          done
+          python3 -c "import json,sys; p=json.load(open('probes.json'))['probes'][0]; sys.exit(0 if p['version']=='0.0.0-ci' else 1)"
+      - name: Diagnostics
+        if: always()
+        run: |
+          { echo '===== main installer'; cat main-out.txt 2>/dev/null; echo '===== probe installer and status'; cat probe-out.txt 2>/dev/null
+            echo '===== main journal'; sudo incus exec main -- journalctl -u unify-syslog --no-pager -n 80
+            echo '===== probe journal'; sudo incus exec probe -- journalctl -u unify-syslog-probe --no-pager -n 120
+            echo '===== probe install log'; sudo incus exec probe -- tail -n 60 /var/log/unify-syslog-probe-install.log
+            echo '===== probes'; cat probes.json 2>/dev/null; } > diag.txt 2>&1 || true
+          cat diag.txt
+          git config user.name ci; git config user.email ci@localhost
+          git checkout -q --orphan diag && git rm -rqf --cached . && git add -f diag.txt
+          git commit -qm "diagnostics ${GITHUB_RUN_ID}" && git push -fq origin HEAD:refs/heads/ci-diagnostics-probe

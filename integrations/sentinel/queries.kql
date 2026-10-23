@@ -1,0 +1,129 @@
+// UniFi Syslog Server - hunting queries for Microsoft Sentinel / Log Analytics.
+// UnifiSyslog_CL holds every event (table mode "custom"), or everything except firewall
+// and IPS events (table mode "split"), which then go to CommonSecurityLog with
+// DeviceVendor "Ubiquiti" and DeviceProduct "UniFi". Queries over firewall and IPS data
+// combine both tables so they work in either mode. Run each query on its own.
+
+// 1. Event volume per site and category (last 24 hours)
+union isfuzzy=true
+    (UnifiSyslog_CL | project TimeGenerated, Site, Category),
+    (CommonSecurityLog | where DeviceVendor == "Ubiquiti" and DeviceProduct == "UniFi"
+        | project TimeGenerated, Site = DeviceCustomString1, Category = DeviceEventCategory)
+| where TimeGenerated > ago(24h)
+| summarize Events = count() by Site, Category
+| order by Events desc
+
+// 2. Top blocked source IPs with ports and countries (last 24 hours)
+union isfuzzy=true
+    (UnifiSyslog_CL | where Category == "firewall" and Action == "block"
+        | project TimeGenerated, SrcIp, DstPort, SrcCountry, Site),
+    (CommonSecurityLog | where DeviceVendor == "Ubiquiti" and DeviceProduct == "UniFi" and DeviceEventCategory == "firewall" and DeviceAction == "block"
+        | project TimeGenerated, SrcIp = SourceIP, DstPort = DestinationPort,
+            SrcCountry = extract(@"(?:^|;)src_country=([^;]*)", 1, AdditionalExtensions), Site = DeviceCustomString1)
+| where TimeGenerated > ago(24h)
+| summarize Blocks = count(), DistinctPorts = dcount(DstPort), Ports = make_set(DstPort, 20), Country = take_any(SrcCountry), Sites = make_set(Site) by SrcIp
+| top 50 by Blocks
+
+// 3. Possible port scans: one source blocked on many destination ports in 15 minutes
+union isfuzzy=true
+    (UnifiSyslog_CL | where Category == "firewall" and Action == "block" | project TimeGenerated, SrcIp, DstIp, DstPort),
+    (CommonSecurityLog | where DeviceVendor == "Ubiquiti" and DeviceProduct == "UniFi" and DeviceEventCategory == "firewall" and DeviceAction == "block"
+        | project TimeGenerated, SrcIp = SourceIP, DstIp = DestinationIP, DstPort = DestinationPort)
+| where TimeGenerated > ago(1d)
+| summarize Ports = dcount(DstPort), Targets = dcount(DstIp) by SrcIp, bin(TimeGenerated, 15m)
+| where Ports >= 25
+| order by Ports desc
+
+// 4. Allowed inbound traffic to sensitive ports (SSH, RDP, SMB, databases)
+union isfuzzy=true
+    (UnifiSyslog_CL | where Category == "firewall" and Action == "allow" | project TimeGenerated, Site, Rule, SrcIp, SrcCountry, DstIp, DstPort, InInterface),
+    (CommonSecurityLog | where DeviceVendor == "Ubiquiti" and DeviceProduct == "UniFi" and DeviceEventCategory == "firewall" and DeviceAction == "allow"
+        | project TimeGenerated, Site = DeviceCustomString1, Rule = DeviceEventClassID, SrcIp = SourceIP,
+            SrcCountry = extract(@"(?:^|;)src_country=([^;]*)", 1, AdditionalExtensions), DstIp = DestinationIP, DstPort = DestinationPort, InInterface = DeviceInboundInterface)
+| where TimeGenerated > ago(7d)
+| where DstPort in (22, 23, 445, 1433, 3306, 3389, 5432, 5900)
+| where not(ipv4_is_private(SrcIp))
+| summarize Connections = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated) by Site, SrcIp, SrcCountry, DstIp, DstPort, Rule
+
+// 5. IPS signatures seen in the last 7 days
+union isfuzzy=true
+    (UnifiSyslog_CL | where Category == "ips" | project TimeGenerated, Rule, Action, SrcIp, DstIp),
+    (CommonSecurityLog | where DeviceVendor == "Ubiquiti" and DeviceProduct == "UniFi" and DeviceEventCategory == "ips"
+        | project TimeGenerated, Rule = DeviceEventClassID, Action = DeviceAction, SrcIp = SourceIP, DstIp = DestinationIP)
+| where TimeGenerated > ago(7d)
+| summarize Alerts = count(), Blocked = countif(Action == "block"), Sources = dcount(SrcIp), Targets = dcount(DstIp), LastSeen = max(TimeGenerated) by Rule
+| order by Alerts desc
+
+// 6. Internal hosts that triggered IPS alerts (possible compromised clients)
+union isfuzzy=true
+    (UnifiSyslog_CL | where Category == "ips" | project TimeGenerated, Rule, SrcIp, DstIp),
+    (CommonSecurityLog | where DeviceVendor == "Ubiquiti" and DeviceProduct == "UniFi" and DeviceEventCategory == "ips"
+        | project TimeGenerated, Rule = DeviceEventClassID, SrcIp = SourceIP, DstIp = DestinationIP)
+| where TimeGenerated > ago(7d)
+| where ipv4_is_private(SrcIp) and not(ipv4_is_private(DstIp))
+| summarize Alerts = count(), Signatures = make_set(Rule, 20), Destinations = make_set(DstIp, 20) by SrcIp
+| order by Alerts desc
+
+// 7. Failed SSH and admin sign-ins by source IP
+UnifiSyslog_CL
+| where TimeGenerated > ago(24h)
+| where (Category == "auth" and EventType == "login_failed") or (Category == "admin" and (Action == "fail" or EventType contains "fail"))
+| summarize Failures = count(), Users = make_set(tostring(Fields.user), 20), Devices = make_set(Hostname, 20), Country = take_any(SrcCountry) by SrcIp
+| order by Failures desc
+
+// 8. Successful SSH sign-in after failures from the same IP
+let window = 1h;
+let fails = UnifiSyslog_CL
+    | where TimeGenerated > ago(1d) and Category == "auth" and EventType == "login_failed"
+    | summarize Failures = count(), LastFailure = max(TimeGenerated) by SrcIp, Hostname;
+UnifiSyslog_CL
+| where TimeGenerated > ago(1d) and Category == "auth" and EventType == "login_success"
+| project SuccessTime = TimeGenerated, SrcIp, Hostname, User = tostring(Fields.user)
+| join kind=inner fails on SrcIp, Hostname
+| where SuccessTime between (LastFailure .. (LastFailure + window)) and Failures >= 3
+
+// 9. VPN authentication failures and connections per source
+UnifiSyslog_CL
+| where TimeGenerated > ago(7d) and Category == "vpn"
+| summarize Failures = countif(EventType == "auth_failed" or Action == "fail"), Connections = countif(EventType == "connected"),
+    Users = make_set(tostring(Fields.user), 20), Country = take_any(SrcCountry) by SrcIp
+| order by Failures desc
+
+// 10. Admin configuration changes
+UnifiSyslog_CL
+| where TimeGenerated > ago(7d) and Category == "admin"
+| project TimeGenerated, Site, Hostname, EventType, User = tostring(Fields.user), SrcIp, Message
+| order by TimeGenerated desc
+
+// 11. Wi-Fi clients with many authentication failures or deauthentications
+UnifiSyslog_CL
+| where TimeGenerated > ago(24h) and Category == "wifi"
+| where EventType in ("auth_failed", "deauthenticated") or Action == "fail"
+| summarize Events = count(), Ssids = make_set(Ssid, 10), AccessPoints = make_set(Hostname, 10) by ClientMac, ClientName
+| where Events >= 10
+| order by Events desc
+
+// 12. Switch ports flapping (link down) and loops
+UnifiSyslog_CL
+| where TimeGenerated > ago(24h) and Category == "switch" and EventType in ("link_down", "loop_detected")
+| summarize Events = count(), LastSeen = max(TimeGenerated) by Site, Hostname, EventType, Port = tostring(Fields.port)
+| order by Events desc
+
+// 13. Devices that stopped sending syslog (silent for more than one hour)
+UnifiSyslog_CL
+| where TimeGenerated > ago(7d)
+| summarize LastSeen = max(TimeGenerated), Model = take_any(DeviceModel) by Site, Hostname
+| where LastSeen < ago(1h)
+| order by LastSeen asc
+
+// 14. UniFi Access: denied entries and doors forced or held open
+UnifiSyslog_CL
+| where TimeGenerated > ago(7d) and Category == "access" and EventType in ("access_denied", "door_forced_open", "door_held_open")
+| project TimeGenerated, Site, EventType, Door = tostring(Fields.door), User = tostring(Fields.user), Message
+| order by TimeGenerated desc
+
+// 15. Alerts fired by UniFi Syslog Server alert rules
+UnifiSyslog_CL
+| where TimeGenerated > ago(7d) and RecordType == "alert"
+| project TimeGenerated, Rule, Message, Count = toint(Fields.alert_count), Query = tostring(Fields.alert_query)
+| order by TimeGenerated desc

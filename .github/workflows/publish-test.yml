@@ -1,0 +1,61 @@
+name: Publish SLIS test release
+on:
+  push:
+    branches: [main]
+    paths: [VERSION, '.github/workflows/publish-test.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Read beta version
+        run: |
+          VERSION=$(tr -d '\r\n' < VERSION)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Build web interface
+        run: cd web && npm ci && npm run build && npm audit
+      - name: Test Linux backend and shell syntax
+        run: |
+          go test ./...
+          bash -n install-slis.sh deploy/install.sh
+      - name: Build Linux distributions
+        run: make dist VERSION="$VERSION"
+      - name: Package Proxmox guest installer
+        run: |
+          mkdir -p bundle/deploy bundle/docs
+          cp dist/unify-syslog-server_linux_amd64.tar.gz bundle/
+          cp deploy/install.sh bundle/deploy/
+          cp install-slis.sh README.md CHANGELOG.md UPSTREAM.md VERSION bundle/
+          cp docs/PROXMOX.md docs/TESTING.md bundle/docs/
+          (cd bundle && sha256sum unify-syslog-server_linux_amd64.tar.gz deploy/install.sh > checksums.txt)
+          tar -C bundle -czf "dist/slis-unifi-syslog-${VERSION}-linux-amd64.tar.gz" .
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+      - name: Publish beta release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: SLIS UniFi Syslog ${{ env.VERSION }}
+          prerelease: true
+          make_latest: false
+          body: |
+            First SLIS Internet Services test release with SLIS branding.
+            Install the slis-unifi-syslog bundle inside a fresh Debian 13 amd64 VM on Proxmox.
+            Extract it and run sudo bash install-slis.sh. Do not run on the Proxmox host.
+            Linux automated tests pass before this release is published. Exact Proxmox 9.2.21 guest acceptance remains to be completed.
+            See README.md, CHANGELOG.md and docs/PROXMOX.md in the repository.
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

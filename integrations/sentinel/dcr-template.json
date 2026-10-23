@@ -1,0 +1,595 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "UniFi Syslog Server: custom table UnifiSyslog_CL, data collection endpoint, data collection rule (streams Custom-UnifiSyslog and Custom-UnifiCommonSecurityLog) and the Monitoring Metrics Publisher role for the app's service principal. Deploy into the resource group of the Log Analytics workspace."
+  },
+  "parameters": {
+    "workspaceResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Full resource id of the Log Analytics workspace (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<name>). The workspace must be in the resource group you deploy this template to."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region for the data collection endpoint and rule. Use the region of the workspace."
+      }
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "unifi-syslog",
+      "metadata": {
+        "description": "Prefix for the names of the data collection endpoint and rule."
+      }
+    },
+    "servicePrincipalObjectId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Object id of the Entra app's enterprise application (service principal), not the app (client) id. Leave empty to skip the role assignment."
+      }
+    },
+    "tableRetentionDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 4,
+      "maxValue": 730,
+      "metadata": {
+        "description": "Interactive retention of the UnifiSyslog_CL table in days."
+      }
+    }
+  },
+  "variables": {
+    "workspaceName": "[last(split(parameters('workspaceResourceId'), '/'))]",
+    "dceName": "[concat(parameters('namePrefix'), '-dce')]",
+    "dcrName": "[concat(parameters('namePrefix'), '-dcr')]",
+    "monitoringMetricsPublisher": "3913510d-42f4-4e42-8a64-420c390055eb"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/tables",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(variables('workspaceName'), '/UnifiSyslog_CL')]",
+      "properties": {
+        "plan": "Analytics",
+        "retentionInDays": "[parameters('tableRetentionDays')]",
+        "schema": {
+          "name": "UnifiSyslog_CL",
+          "description": "UniFi syslog events forwarded by UniFi Syslog Server",
+          "columns": [
+            {
+              "name": "TimeGenerated",
+              "type": "dateTime"
+            },
+            {
+              "name": "ReceivedTime",
+              "type": "dateTime"
+            },
+            {
+              "name": "EventId",
+              "type": "string"
+            },
+            {
+              "name": "RecordType",
+              "type": "string"
+            },
+            {
+              "name": "SyslogSourceIp",
+              "type": "string"
+            },
+            {
+              "name": "Site",
+              "type": "string"
+            },
+            {
+              "name": "Hostname",
+              "type": "string"
+            },
+            {
+              "name": "DeviceName",
+              "type": "string"
+            },
+            {
+              "name": "DeviceModel",
+              "type": "string"
+            },
+            {
+              "name": "DeviceMac",
+              "type": "string"
+            },
+            {
+              "name": "DeviceVersion",
+              "type": "string"
+            },
+            {
+              "name": "Facility",
+              "type": "int"
+            },
+            {
+              "name": "Severity",
+              "type": "int"
+            },
+            {
+              "name": "SeverityName",
+              "type": "string"
+            },
+            {
+              "name": "App",
+              "type": "string"
+            },
+            {
+              "name": "Category",
+              "type": "string"
+            },
+            {
+              "name": "EventType",
+              "type": "string"
+            },
+            {
+              "name": "Action",
+              "type": "string"
+            },
+            {
+              "name": "Rule",
+              "type": "string"
+            },
+            {
+              "name": "SrcIp",
+              "type": "string"
+            },
+            {
+              "name": "SrcPort",
+              "type": "int"
+            },
+            {
+              "name": "SrcCountry",
+              "type": "string"
+            },
+            {
+              "name": "SrcAsn",
+              "type": "string"
+            },
+            {
+              "name": "SrcAsOrg",
+              "type": "string"
+            },
+            {
+              "name": "SrcName",
+              "type": "string"
+            },
+            {
+              "name": "DstIp",
+              "type": "string"
+            },
+            {
+              "name": "DstPort",
+              "type": "int"
+            },
+            {
+              "name": "DstCountry",
+              "type": "string"
+            },
+            {
+              "name": "DstAsn",
+              "type": "string"
+            },
+            {
+              "name": "DstAsOrg",
+              "type": "string"
+            },
+            {
+              "name": "DstName",
+              "type": "string"
+            },
+            {
+              "name": "Protocol",
+              "type": "string"
+            },
+            {
+              "name": "InInterface",
+              "type": "string"
+            },
+            {
+              "name": "OutInterface",
+              "type": "string"
+            },
+            {
+              "name": "ClientMac",
+              "type": "string"
+            },
+            {
+              "name": "ClientName",
+              "type": "string"
+            },
+            {
+              "name": "ClientIp",
+              "type": "string"
+            },
+            {
+              "name": "Ssid",
+              "type": "string"
+            },
+            {
+              "name": "Message",
+              "type": "string"
+            },
+            {
+              "name": "RawMessage",
+              "type": "string"
+            },
+            {
+              "name": "Fields",
+              "type": "dynamic"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionEndpoints",
+      "apiVersion": "2022-06-01",
+      "name": "[variables('dceName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "description": "Logs Ingestion endpoint for UniFi Syslog Server",
+        "networkAcls": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2022-06-01",
+      "name": "[variables('dcrName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', variables('workspaceName'), 'UnifiSyslog_CL')]"
+      ],
+      "properties": {
+        "description": "UniFi Syslog Server forwarding",
+        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName'))]",
+        "streamDeclarations": {
+          "Custom-UnifiSyslog": {
+            "columns": [
+              {
+                "name": "TimeGenerated",
+                "type": "datetime"
+              },
+              {
+                "name": "ReceivedTime",
+                "type": "datetime"
+              },
+              {
+                "name": "EventId",
+                "type": "string"
+              },
+              {
+                "name": "RecordType",
+                "type": "string"
+              },
+              {
+                "name": "SyslogSourceIp",
+                "type": "string"
+              },
+              {
+                "name": "Site",
+                "type": "string"
+              },
+              {
+                "name": "Hostname",
+                "type": "string"
+              },
+              {
+                "name": "DeviceName",
+                "type": "string"
+              },
+              {
+                "name": "DeviceModel",
+                "type": "string"
+              },
+              {
+                "name": "DeviceMac",
+                "type": "string"
+              },
+              {
+                "name": "DeviceVersion",
+                "type": "string"
+              },
+              {
+                "name": "Facility",
+                "type": "int"
+              },
+              {
+                "name": "Severity",
+                "type": "int"
+              },
+              {
+                "name": "SeverityName",
+                "type": "string"
+              },
+              {
+                "name": "App",
+                "type": "string"
+              },
+              {
+                "name": "Category",
+                "type": "string"
+              },
+              {
+                "name": "EventType",
+                "type": "string"
+              },
+              {
+                "name": "Action",
+                "type": "string"
+              },
+              {
+                "name": "Rule",
+                "type": "string"
+              },
+              {
+                "name": "SrcIp",
+                "type": "string"
+              },
+              {
+                "name": "SrcPort",
+                "type": "int"
+              },
+              {
+                "name": "SrcCountry",
+                "type": "string"
+              },
+              {
+                "name": "SrcAsn",
+                "type": "string"
+              },
+              {
+                "name": "SrcAsOrg",
+                "type": "string"
+              },
+              {
+                "name": "SrcName",
+                "type": "string"
+              },
+              {
+                "name": "DstIp",
+                "type": "string"
+              },
+              {
+                "name": "DstPort",
+                "type": "int"
+              },
+              {
+                "name": "DstCountry",
+                "type": "string"
+              },
+              {
+                "name": "DstAsn",
+                "type": "string"
+              },
+              {
+                "name": "DstAsOrg",
+                "type": "string"
+              },
+              {
+                "name": "DstName",
+                "type": "string"
+              },
+              {
+                "name": "Protocol",
+                "type": "string"
+              },
+              {
+                "name": "InInterface",
+                "type": "string"
+              },
+              {
+                "name": "OutInterface",
+                "type": "string"
+              },
+              {
+                "name": "ClientMac",
+                "type": "string"
+              },
+              {
+                "name": "ClientName",
+                "type": "string"
+              },
+              {
+                "name": "ClientIp",
+                "type": "string"
+              },
+              {
+                "name": "Ssid",
+                "type": "string"
+              },
+              {
+                "name": "Message",
+                "type": "string"
+              },
+              {
+                "name": "RawMessage",
+                "type": "string"
+              },
+              {
+                "name": "Fields",
+                "type": "dynamic"
+              }
+            ]
+          },
+          "Custom-UnifiCommonSecurityLog": {
+            "columns": [
+              {
+                "name": "TimeGenerated",
+                "type": "datetime"
+              },
+              {
+                "name": "DeviceVendor",
+                "type": "string"
+              },
+              {
+                "name": "DeviceProduct",
+                "type": "string"
+              },
+              {
+                "name": "DeviceVersion",
+                "type": "string"
+              },
+              {
+                "name": "DeviceEventClassID",
+                "type": "string"
+              },
+              {
+                "name": "DeviceEventCategory",
+                "type": "string"
+              },
+              {
+                "name": "Activity",
+                "type": "string"
+              },
+              {
+                "name": "LogSeverity",
+                "type": "string"
+              },
+              {
+                "name": "DeviceAction",
+                "type": "string"
+              },
+              {
+                "name": "SimplifiedDeviceAction",
+                "type": "string"
+              },
+              {
+                "name": "SourceIP",
+                "type": "string"
+              },
+              {
+                "name": "SourcePort",
+                "type": "int"
+              },
+              {
+                "name": "DestinationIP",
+                "type": "string"
+              },
+              {
+                "name": "DestinationPort",
+                "type": "int"
+              },
+              {
+                "name": "Protocol",
+                "type": "string"
+              },
+              {
+                "name": "DeviceInboundInterface",
+                "type": "string"
+              },
+              {
+                "name": "DeviceOutboundInterface",
+                "type": "string"
+              },
+              {
+                "name": "DeviceName",
+                "type": "string"
+              },
+              {
+                "name": "DeviceMacAddress",
+                "type": "string"
+              },
+              {
+                "name": "SourceMACAddress",
+                "type": "string"
+              },
+              {
+                "name": "Computer",
+                "type": "string"
+              },
+              {
+                "name": "DeviceCustomString1",
+                "type": "string"
+              },
+              {
+                "name": "DeviceCustomString1Label",
+                "type": "string"
+              },
+              {
+                "name": "Message",
+                "type": "string"
+              },
+              {
+                "name": "AdditionalExtensions",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "workspaceResourceId": "[parameters('workspaceResourceId')]",
+              "name": "workspace"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "Custom-UnifiSyslog"
+            ],
+            "destinations": [
+              "workspace"
+            ],
+            "transformKql": "source",
+            "outputStream": "Custom-UnifiSyslog_CL"
+          },
+          {
+            "streams": [
+              "Custom-UnifiCommonSecurityLog"
+            ],
+            "destinations": [
+              "workspace"
+            ],
+            "transformKql": "source",
+            "outputStream": "Microsoft-CommonSecurityLog"
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[not(empty(parameters('servicePrincipalObjectId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.Insights/dataCollectionRules/{0}', variables('dcrName'))]",
+      "name": "[guid(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), parameters('servicePrincipalObjectId'), variables('monitoringMetricsPublisher'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisher'))]",
+        "principalId": "[parameters('servicePrincipalObjectId')]",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ],
+  "outputs": {
+    "logsIngestionEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('dceName')), '2022-06-01').logsIngestion.endpoint]"
+    },
+    "dcrImmutableId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2022-06-01').immutableId]"
+    },
+    "customStream": {
+      "type": "string",
+      "value": "Custom-UnifiSyslog"
+    },
+    "cefStream": {
+      "type": "string",
+      "value": "Custom-UnifiCommonSecurityLog"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+# Grafana data source provisioning for UniFi Syslog Server.
+# Copy to /etc/grafana/provisioning/datasources/unifi-syslog.yml, fill in the
+# address and the API token, and restart Grafana. The ClickHouse data source
+# needs the plugin: grafana-cli plugins install grafana-clickhouse-datasource
+#
+# Create the API token in UniFi Syslog Server under Account > API tokens
+# (read-only is enough). For ClickHouse the token must belong to an
+# administrator, and "Grafana access to
+# the log store" must be on under Administration > Metrics & Grafana.
+apiVersion: 1
+
+datasources:
+  - name: UniFi Syslog Server (metrics)
+    type: prometheus
+    uid: unifi-syslog-prometheus
+    access: proxy
+    # Your Prometheus server, which scrapes https://SYSLOG-SERVER:8080/metrics
+    url: http://prometheus:9090
+
+  - name: UniFi Syslog Server (logs)
+    type: grafana-clickhouse-datasource
+    uid: unifi-syslog-clickhouse
+    jsonData:
+      protocol: http
+      host: SYSLOG-SERVER          # name or IP of UniFi Syslog Server
+      port: 8080
+      path: /clickhouse
+      secure: true                 # the web port speaks HTTPS too
+      tlsSkipVerify: true          # only with the built-in self-signed certificate
+      username: grafana
+      defaultDatabase: unify_syslog
+    secureJsonData:
+      password: uss_REPLACE_WITH_API_TOKEN

@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-indigo-50: #eefaff;
+  --color-indigo-100: #d5f3ff;
+  --color-indigo-200: #a8e9ff;
+  --color-indigo-300: #63dcff;
+  --color-indigo-400: #1cc5f4;
+  --color-indigo-500: #009fe3;
+  --color-indigo-600: #007bbd;
+  --color-indigo-700: #005b96;
+  --color-indigo-800: #064575;
+  --color-indigo-900: #082f59;
+  --color-indigo-950: #061b3d;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --panel-2: #f1f4f9;
+  --border: #e3e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+}
+.dark {
+  color-scheme: dark;
+  --bg: #06132b;
+  --panel: #0b203d;
+  --panel-2: #102b4c;
+  --border: #1e2638;
+  --text: #e6eaf2;
+  --muted: #8591a8;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.panel { background: var(--panel); border: 1px solid var(--border); }
+.panel-2 { background: var(--panel-2); }
+.border-app { border-color: var(--border); }
+.text-muted { color: var(--muted); }
+.bg-app { background: var(--bg); }
+
+/* In the components layer so utilities like w-44 can size inputs. */
+@layer components {
+  .input {
+    width: 100%;
+    border-radius: 0.6rem;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    padding: 0.55rem 0.8rem;
+    font-size: 0.875rem;
+    color: var(--text);
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .input:focus { border-color: #009fe3; box-shadow: 0 0 0 3px rgb(0 159 227 / .2); }
+  .input::placeholder { color: var(--muted); opacity: .7; }
+  textarea.input { font-family: var(--font-mono); font-size: .8rem; }
+}
+
+.scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+.grad-text {
+  background: linear-gradient(135deg, #009fe3, #63dcff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes fadein { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+.fade-in { animation: fadein .25s ease-out; }
+@keyframes pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.pulse-dot { animation: pulse-dot 1.4s infinite; }

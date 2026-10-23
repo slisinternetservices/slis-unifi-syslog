@@ -1,0 +1,337 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "UniFi Syslog Server: Microsoft Sentinel scheduled analytics rules. All rules are deployed disabled; enable them in Sentinel > Analytics after reviewing the thresholds."
+  },
+  "parameters": {
+    "workspace": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Log Analytics workspace that has Microsoft Sentinel enabled."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01",
+      "name": "[concat(parameters('workspace'), '/Microsoft.SecurityInsights/', guid(parameters('workspace'), 'unifi-syslog-bruteforce'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "UniFi - SSH or admin sign-in brute force",
+        "description": "10 or more failed SSH or UniFi admin sign-ins from one source IP within one hour.",
+        "severity": "Medium",
+        "enabled": false,
+        "query": "UnifiSyslog_CL\n| where (Category == \"auth\" and EventType == \"login_failed\") or (Category == \"admin\" and (Action == \"fail\" or EventType contains \"fail\"))\n| where isnotempty(SrcIp)\n| summarize Failures = count(), Users = make_set(tostring(Fields.user), 20), Hostname = take_any(Hostname), Site = take_any(Site),\n    StartTime = min(TimeGenerated), EndTime = max(TimeGenerated) by SrcIp\n| where Failures >= 10",
+        "queryFrequency": "PT15M",
+        "queryPeriod": "PT1H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "CredentialAccess"
+        ],
+        "techniques": [
+          "T1110"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIp"
+              }
+            ]
+          },
+          {
+            "entityType": "Host",
+            "fieldMappings": [
+              {
+                "identifier": "HostName",
+                "columnName": "Hostname"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "Site": "Site"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": [],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01",
+      "name": "[concat(parameters('workspace'), '/Microsoft.SecurityInsights/', guid(parameters('workspace'), 'unifi-syslog-ips-high'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "UniFi - High severity IPS alert",
+        "description": "The UniFi IPS/IDS raised a priority 1 (syslog severity critical or higher) alert.",
+        "severity": "High",
+        "enabled": false,
+        "query": "union isfuzzy=true\n    (UnifiSyslog_CL | where Category == \"ips\" | project TimeGenerated, Site, Hostname, Action, Rule, Severity, SrcIp, DstIp, DstPort, Message),\n    (CommonSecurityLog | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\" and DeviceEventCategory == \"ips\"\n        | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, Action = DeviceAction, Rule = DeviceEventClassID,\n            Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n            SrcIp = SourceIP, DstIp = DestinationIP, DstPort = DestinationPort, Message)\n| where Severity <= 2\n| summarize Alerts = count(), Blocked = countif(Action == \"block\"), Signatures = make_set(Rule, 10), Hostname = take_any(Hostname), Site = take_any(Site),\n    StartTime = min(TimeGenerated), EndTime = max(TimeGenerated) by SrcIp, DstIp",
+        "queryFrequency": "PT5M",
+        "queryPeriod": "PT5M",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "InitialAccess",
+          "Execution"
+        ],
+        "techniques": [
+          "T1190"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIp"
+              }
+            ]
+          },
+          {
+            "entityType": "Host",
+            "fieldMappings": [
+              {
+                "identifier": "HostName",
+                "columnName": "Hostname"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "Site": "Site"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": [],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01",
+      "name": "[concat(parameters('workspace'), '/Microsoft.SecurityInsights/', guid(parameters('workspace'), 'unifi-syslog-portscan'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "UniFi - Port scan from one source",
+        "description": "One source IP was blocked by the firewall on 25 or more distinct destination ports within 15 minutes.",
+        "severity": "Medium",
+        "enabled": false,
+        "query": "union isfuzzy=true\n    (UnifiSyslog_CL | where Category == \"firewall\" | project TimeGenerated, Site, Hostname, Action, Rule, Severity, SrcIp, DstIp, DstPort, Message),\n    (CommonSecurityLog | where DeviceVendor == \"Ubiquiti\" and DeviceProduct == \"UniFi\" and DeviceEventCategory == \"firewall\"\n        | project TimeGenerated, Site = DeviceCustomString1, Hostname = Computer, Action = DeviceAction, Rule = DeviceEventClassID,\n            Severity = case(LogSeverity == \"10\", 1, LogSeverity == \"9\", 2, LogSeverity == \"7\", 3, LogSeverity == \"5\", 4, LogSeverity == \"3\", 5, LogSeverity == \"1\", 6, 7),\n            SrcIp = SourceIP, DstIp = DestinationIP, DstPort = DestinationPort, Message)\n| where Action == \"block\" and isnotempty(SrcIp)\n| summarize Ports = dcount(DstPort), Blocks = count(), Targets = dcount(DstIp), Hostname = take_any(Hostname), Site = take_any(Site),\n    StartTime = min(TimeGenerated), EndTime = max(TimeGenerated) by SrcIp\n| where Ports >= 25",
+        "queryFrequency": "PT15M",
+        "queryPeriod": "PT15M",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "Discovery",
+          "Reconnaissance"
+        ],
+        "techniques": [
+          "T1046",
+          "T1595"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIp"
+              }
+            ]
+          },
+          {
+            "entityType": "Host",
+            "fieldMappings": [
+              {
+                "identifier": "HostName",
+                "columnName": "Hostname"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "Site": "Site"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": [],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01",
+      "name": "[concat(parameters('workspace'), '/Microsoft.SecurityInsights/', guid(parameters('workspace'), 'unifi-syslog-vpn-fail'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "UniFi - VPN authentication failures",
+        "description": "5 or more failed VPN authentications from one source IP within one hour.",
+        "severity": "Medium",
+        "enabled": false,
+        "query": "UnifiSyslog_CL\n| where Category == \"vpn\" and (EventType == \"auth_failed\" or Action == \"fail\")\n| summarize Failures = count(), Users = make_set(tostring(Fields.user), 20), Hostname = take_any(Hostname), Site = take_any(Site),\n    StartTime = min(TimeGenerated), EndTime = max(TimeGenerated) by SrcIp\n| where Failures >= 5",
+        "queryFrequency": "PT15M",
+        "queryPeriod": "PT1H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "CredentialAccess",
+          "InitialAccess"
+        ],
+        "techniques": [
+          "T1110",
+          "T1133"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIp"
+              }
+            ]
+          },
+          {
+            "entityType": "Host",
+            "fieldMappings": [
+              {
+                "identifier": "HostName",
+                "columnName": "Hostname"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "Site": "Site"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": [],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01",
+      "name": "[concat(parameters('workspace'), '/Microsoft.SecurityInsights/', guid(parameters('workspace'), 'unifi-syslog-door-forced'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "UniFi Access - Door forced open",
+        "description": "UniFi Access reported a door that was forced open.",
+        "severity": "High",
+        "enabled": false,
+        "query": "UnifiSyslog_CL\n| where Category == \"access\" and EventType == \"door_forced_open\"\n| extend Door = tostring(Fields.door)\n| project TimeGenerated, Site, Hostname, DeviceName, Door, Message, SrcIp",
+        "queryFrequency": "PT5M",
+        "queryPeriod": "PT5M",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "InitialAccess"
+        ],
+        "techniques": [
+          "T1200"
+        ],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIp"
+              }
+            ]
+          },
+          {
+            "entityType": "Host",
+            "fieldMappings": [
+              {
+                "identifier": "HostName",
+                "columnName": "Hostname"
+              }
+            ]
+          }
+        ],
+        "customDetails": {
+          "Site": "Site"
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": [],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        }
+      }
+    }
+  ]
+}

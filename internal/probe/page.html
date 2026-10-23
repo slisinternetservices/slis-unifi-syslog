@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniFi Syslog probe</title>
+<style>
+  :root { --bg:#0b1020; --panel:#121a2e; --panel2:#18213a; --border:#222c45; --text:#e6e9f2; --muted:#8a94ab; --accent:#6366f1; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f5f7fb; --panel:#ffffff; --panel2:#f1f4f9; --border:#e2e7f0; --text:#0f172a; --muted:#64748b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:40px 16px; }
+  .brand { display:flex; align-items:center; gap:12px; margin-bottom:28px; }
+  .logo { width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg,#6366f1,#06b6d4); display:grid; place-items:center; color:#fff; font-weight:700; }
+  h1 { font-size:20px; margin:0; } .sub { color:var(--muted); font-size:13px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:22px; margin-bottom:18px; }
+  .card h2 { font-size:15px; margin:0 0 4px; } .card p { color:var(--muted); margin:0 0 16px; font-size:14px; }
+  textarea { width:100%; min-height:92px; resize:vertical; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:12px; padding:12px; font:13px ui-monospace,monospace; }
+  textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  button { margin-top:12px; background:linear-gradient(135deg,#6366f1,#4f46e5); color:#fff; border:0; border-radius:12px; padding:10px 18px; font-weight:600; cursor:pointer; }
+  button[disabled] { opacity:.6; cursor:wait; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .m { background:var(--panel2); border-radius:14px; padding:12px 14px; min-width:0; }
+  .m .l { font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+  .m .v { font-weight:600; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pill { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:600; }
+  .pill::before { content:""; width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .ok { color:var(--ok); background:color-mix(in srgb,var(--ok) 14%,transparent); }
+  .warn { color:var(--warn); background:color-mix(in srgb,var(--warn) 14%,transparent); }
+  .err { color:var(--err); background:color-mix(in srgb,var(--err) 14%,transparent); }
+  .msg { margin-top:12px; font-size:13px; } .msg.e { color:var(--err); }
+  code { background:var(--panel2); padding:2px 6px; border-radius:6px; font-size:12px; }
+  .hidden { display:none; }
+  footer { color:var(--muted); font-size:12px; text-align:center; margin-top:24px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><div class="logo">U</div><div><h1 data-t="UniFi Syslog probe">UniFi Syslog probe</h1><div class="sub" id="host"></div></div></div>
+
+  <section class="card hidden" id="enroll">
+    <h2 data-t="Connect this probe to your main server">Connect this probe to your main server</h2>
+    <p data-t="intro">On the main server, open Probes, click Add probe and copy the enrollment key. Paste it here. Messages already received are kept and sent once the probe is connected.</p>
+    <textarea id="key" placeholder="uss1_…" spellcheck="false"></textarea>
+    <button id="go" data-t="Connect">Connect</button>
+    <div class="msg" id="msg"></div>
+  </section>
+
+  <section class="card hidden" id="status">
+    <div style="display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      <div><h2 id="name"></h2><div class="sub" id="where"></div></div>
+      <span class="pill" id="state"></span>
+    </div>
+    <div class="grid" id="metrics"></div>
+    <div class="msg e" id="error"></div>
+  </section>
+
+  <section class="card">
+    <h2 data-t="Send UniFi logs here">Send UniFi logs here</h2>
+    <p style="margin:0"><span data-t="In UniFi Network, set the remote syslog server to">In UniFi Network, set the remote syslog server to</span> <code id="addr"></code> <span data-t="(UDP or TCP).">(UDP or TCP).</span></p>
+  </section>
+  <footer id="ver"></footer>
+</main>
+<script>
+const nl = {
+  "UniFi Syslog probe":"UniFi Syslog-probe","Connect this probe to your main server":"Koppel deze probe aan je hoofdserver",
+  "intro":"Open op de hoofdserver Probes, klik op Probe toevoegen en kopieer de koppelsleutel. Plak die hier. Berichten die al zijn ontvangen blijven bewaard en worden verstuurd zodra de probe gekoppeld is.",
+  "Connect":"Koppelen","Connecting…":"Bezig met koppelen…","Send UniFi logs here":"Stuur UniFi-logs hierheen",
+  "In UniFi Network, set the remote syslog server to":"Stel in UniFi Network de externe syslog-server in op","(UDP or TCP).":"(UDP of TCP).",
+  "Connected":"Verbonden","Not connected":"Niet verbonden","Key revoked":"Sleutel ingetrokken","Site":"Locatie","Main server":"Hoofdserver",
+  "Messages/s":"Berichten/s","Buffered":"In buffer","Devices (24 h)":"Apparaten (24 u)","Last contact":"Laatste contact","Received":"Ontvangen","Sent":"Verzonden",
+  "Version":"Versie","Disk":"Schijf","never":"nooit","revoked":"De hoofdserver accepteert de sleutel van deze probe niet meer. Voer hieronder een nieuwe koppelsleutel in.",
+};
+const lang = (navigator.language || 'en').toLowerCase().startsWith('nl') ? nl : {};
+const t = (k) => lang[k] || k;
+document.documentElement.lang = lang === nl ? 'nl' : 'en';
+document.querySelectorAll('[data-t]').forEach((e) => { const k = e.dataset.t; if (lang[k]) e.textContent = lang[k] });
+const $ = (id) => document.getElementById(id);
+const fmtB = (b) => { const u = ['B','KB','MB','GB','TB']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++ } return (i ? b.toFixed(1) : b) + ' ' + u[i] };
+const fmtN = (n) => new Intl.NumberFormat(document.documentElement.lang).format(n);
+const ago = (s) => { if (!s) return t('never'); const d = Math.max(0, Date.now() / 1000 - s); return d < 90 ? Math.round(d) + ' s' : d < 5400 ? Math.round(d / 60) + ' min' : Math.round(d / 3600) + ' h' };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+async function load() {
+  const s = await (await fetch('/api/status')).json();
+  const st = s.status;
+  $('host').textContent = st.hostname + (st.ips?.length ? ' · ' + st.ips.join(', ') : '');
+  const port = (st.listen.match(/:(\d+)/) || [, '514'])[1];
+  $('addr').textContent = (st.ips?.[0] || location.hostname) + ':' + port;
+  $('ver').textContent = 'unify-syslog-probe ' + s.version + ' · ' + st.os;
+  const needEnroll = !s.enrolled || s.revoked;
+  $('enroll').classList.toggle('hidden', !needEnroll);
+  if (s.revoked && !$('msg').textContent) { $('msg').textContent = t('revoked'); $('msg').className = 'msg e' }
+  $('status').classList.toggle('hidden', !s.enrolled);
+  if (!s.enrolled) return;
+  $('name').textContent = s.name || st.hostname;
+  $('where').textContent = t('Site') + ': ' + (s.site || 'default') + ' · ' + t('Main server') + ': ' + s.server;
+  const online = s.last_contact && Date.now() / 1000 - s.last_contact < 90;
+  const p = $('state');
+  p.className = 'pill ' + (s.revoked ? 'err' : online ? 'ok' : 'warn');
+  p.textContent = s.revoked ? t('Key revoked') : online ? t('Connected') : t('Not connected');
+  const m = [
+    [t('Messages/s'), st.rate.toFixed(1)], [t('Buffered'), fmtN(st.buffer_records) + ' · ' + fmtB(st.buffer_bytes)],
+    [t('Devices (24 h)'), st.devices], [t('Last contact'), ago(s.last_contact)],
+    [t('Received'), fmtN(st.received)], [t('Sent'), fmtN(st.sent)],
+    [t('Disk'), fmtB(st.disk_used) + ' / ' + fmtB(st.disk_total)], [t('Version'), s.version],
+  ];
+  $('metrics').innerHTML = m.map(([l, v]) => `<div class="m"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('');
+  $('error').textContent = s.last_error || '';
+}
+$('go').onclick = async () => {
+  const b = $('go'), msg = $('msg');
+  b.disabled = true; b.textContent = t('Connecting…'); msg.textContent = ''; msg.className = 'msg';
+  try {
+    const r = await fetch('/api/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-USS': '1' }, body: JSON.stringify({ key: $('key').value.trim() }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    $('key').value = '';
+    await load();
+  } catch (e) { msg.textContent = e.message; msg.className = 'msg e' }
+  finally { b.disabled = false; b.textContent = t('Connect') }
+};
+load(); setInterval(() => load().catch(() => {}), 5000);
+</script>
+</body>
+</html>

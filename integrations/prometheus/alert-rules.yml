@@ -1,0 +1,65 @@
+# Prometheus alert rules for UniFi Syslog Server.
+# Reference this file under rule_files in prometheus.yml.
+groups:
+  - name: unifi-syslog
+    rules:
+      - alert: UnifiSyslogDown
+        expr: up{job="unifi-syslog"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "UniFi Syslog Server {{ $labels.instance }} does not answer"
+
+      - alert: UnifiSyslogClickHouseDown
+        expr: uss_clickhouse_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "ClickHouse is not reachable from {{ $labels.instance }}; logs are not stored"
+
+      - alert: UnifiSyslogNoMessages
+        expr: sum by (instance) (rate(uss_syslog_received_total[15m])) == 0 and on (instance) uss_ha_active != 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "No syslog messages received by {{ $labels.instance }} for 15 minutes"
+
+      - alert: UnifiSyslogDropping
+        expr: increase(uss_ingest_dropped_total[10m]) + increase(uss_kernel_udp_receive_buffer_errors_total[10m]) > 100
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.instance }} is dropping syslog messages"
+
+      - alert: UnifiSyslogDiskFull
+        expr: uss_disk_free_bytes / uss_disk_total_bytes < 0.1
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "Less than 10% free on {{ $labels.path }} ({{ $labels.instance }})"
+
+      - alert: UnifiSyslogForwardingFailing
+        expr: uss_forward_up == 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Forwarding to {{ $labels.destination }} fails"
+
+      - alert: UnifiSyslogProbeOffline
+        expr: uss_probe_up == 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Probe {{ $labels.probe }} ({{ $labels.site }}) is offline"
+
+      - alert: UnifiSyslogBackupStale
+        expr: time() - uss_backup_last_success_timestamp_seconds > 2 * 86400 and uss_backup_last_success_timestamp_seconds > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "No successful backup for more than two days on {{ $labels.instance }}"
+
+      - alert: UnifiSyslogNoActiveNode
+        expr: max(uss_ha_enabled) == 1 and max(uss_ha_active) == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Neither node of the high availability pair holds the virtual IP"

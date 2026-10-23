@@ -1,6 +1,6 @@
 # SLIS UniFi Syslog Server
 
-**SLIS Internet Services â€” 0.1.0-beta.1 (test release)**
+**SLIS Internet Services - 0.1.0-beta.1 (test release)**
 
 A central log server for UniFi networks, based on [rhisijmuiden/unifi-syslog-server](https://github.com/rhisijmuiden/unifi-syslog-server).
 It receives UDP/TCP syslog on port 514, parses UniFi events, stores logs in ClickHouse,

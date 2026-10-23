@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-- Record future changes here before the next release.
+- Published the source to the SLIS GitHub repository and added a Linux-tested beta release workflow.
+- Full backend tests passed on the GitHub Linux runner; actual Proxmox guest acceptance remains outstanding.
 
 ## [0.1.0-beta.1] - 2026-10-23
 

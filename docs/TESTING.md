@@ -22,3 +22,14 @@ web login and end-to-end syslog ingestion still need the acceptance checklist in
 Optional integrations, backups/restore, alerts, SSO and update/rollback need their own acceptance tests.
 
 This is a compiled test candidate, not a production-validated appliance or bootable VM image.
+
+## GitHub Linux validation
+
+The Publish SLIS test release workflow has now passed the full `go test ./...`
+suite and installer shell syntax checks on Ubuntu Linux for commit
+93ad183e059f98bd99b532591459494cb584b078.
+The production web build and npm audit also passed (zero known vulnerabilities).
+This supersedes the earlier Windows-only backend validation limitation above.
+Actual Proxmox guest installation and acceptance testing remain outstanding.
+
+Workflow: https://github.com/slisinternetservices/slis-unifi-syslog/actions/runs/39990936443

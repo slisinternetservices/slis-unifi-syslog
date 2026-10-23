@@ -22,15 +22,21 @@ jobs:
         run: |
           make build VERSION=$(cat VERSION)
           tar -C bin -czf server.tar.gz unify-syslog
-      - name: Start unprivileged Debian CT with 2 CPU and 2 GiB RAM
+      - name: Install container runtime
+        timeout-minutes: 4
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq incus
+          set -x
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y incus
           sudo incus admin init --auto
           sudo iptables -I DOCKER-USER -j ACCEPT || true
+      - name: Start unprivileged Debian CT with 2 CPU and 2 GiB RAM
+        timeout-minutes: 5
+        run: |
+          set -x
           sudo incus launch images:debian/13 slis -c security.privileged=false -c limits.cpu=2 -c limits.memory=2GiB -c limits.memory.swap=false
           for i in $(seq 1 60); do sudo incus exec slis -- getent hosts deb.debian.org && break; sleep 2; done
-          sudo incus exec slis -- bash -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates'
+          sudo incus exec slis -- bash -c 'apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 update && apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 install -y curl ca-certificates'
           sudo incus file push deploy/install.sh slis/root/install.sh
           sudo incus file push server.tar.gz slis/root/server.tar.gz
       - name: Install full server including local ClickHouse

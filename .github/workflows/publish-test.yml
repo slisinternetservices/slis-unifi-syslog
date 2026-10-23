@@ -1,4 +1,5 @@
 name: Publish SLIS test release
+# CT installation is a required release gate.
 on:
   push:
     branches: [main]

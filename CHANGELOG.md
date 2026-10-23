@@ -12,6 +12,13 @@
 
 ## [Unreleased]
 
+### Branding
+- Replaced the default square badge with the original blue SLIS letterhead wordmark,
+  including INTERNET SERVICES, rendered directly from the supplied vector artwork.
+- Added transparent light/dark PNGs and intrinsic dimensions to preserve proportions.
+- Dark backgrounds use a light subtitle; no white rectangle, rounded crop or image shadow.
+
+
 ### Fixed
 - Installer checksum verification accepts LF and CRLF manifests and fails closed on missing,
   duplicate, malformed or mismatched entries. Fixes the beta.2 Windows checksum packaging error.

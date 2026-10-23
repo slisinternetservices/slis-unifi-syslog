@@ -56,3 +56,12 @@ Workflow: https://github.com/slisinternetservices/slis-unifi-syslog/actions/runs
 Actual pct provisioning on the user's Proxmox 9.2.21 host remains untested.
 The Incus test exercises Linux container confinement, service installation and ingestion;
 it is not an execution of the Proxmox host provisioning script.
+
+## Beta.2 package publication
+
+The application and container tests passed. GitHub denied the workflow's release
+create/update calls (HTTP 403), so the beta.2 binaries were cross-built locally
+with Go 1.26.8 from the same application source and attached through the owner's
+GitHub session. The installation bundle's internal checksums were verified, and
+all seven published asset digests matched their local SHA-256 hashes.
+The failed workflow publication step is not a failed container/resource test.
